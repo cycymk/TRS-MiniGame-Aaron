@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Space Hacking Minigame</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <canvas id="spaceCanvas" width="1280" height="720" aria-label="space combat view"></canvas>
+
+      <section class="ship-panel" aria-label="ship status">
+        <h1>SHIP STATUS</h1>
+        <div class="meter-row">
+          <span>HP</span>
+          <div class="meter"><i id="hpBar"></i></div>
+        </div>
+        <div class="meter-row">
+          <span>AMMO</span>
+          <div class="meter ammo"><i id="ammoBar"></i></div>
+        </div>
+      </section>
+
+      <section class="boss-panel" aria-label="boss status">
+        <div class="boss-title">MOTHERSHIP NEMESIS</div>
+        <div class="boss-meter"><i id="bossBar"></i></div>
+        <div id="damageReadout" class="damage-readout">DAMAGE READY</div>
+      </section>
+
+      <section id="timerPanel" class="timer-panel hidden" aria-label="bullet time">
+        BULLET TIME <span id="timerValue">05.0s</span>
+      </section>
+
+      <section id="hackPanel" class="hack-panel hidden" aria-label="hacking minigame">
+        <header>
+          <div>
+            <h2>HACKING MINIGAME</h2>
+            <p>START &gt; ROUTE &gt; CORE / NUM 8 2 4 6</p>
+          </div>
+          <div id="boostCounter" class="boost-counter">x1</div>
+        </header>
+        <div id="hackGrid" class="hack-grid"></div>
+        <footer>
+          <span id="hackStatus">ROUTE ACTIVE</span>
+          <span id="routeStats">0 BOOST</span>
+        </footer>
+      </section>
+
+      <section class="cockpit-frame" aria-hidden="true">
+        <img src="./public/assets/space-hacking-mockup.png" alt="" />
+      </section>
+
+      <section class="control-strip" aria-label="controls">
+        <span>&#8592; / 4</span>
+        <span>&#8594; / 6</span>
+        <span>0 FIRE</span>
+        <span>+ HACK</span>
+      </section>
+
+      <div id="toast" class="toast hidden" role="status"></div>
+    </main>
+
+    <script type="module" src="./src/game.js"></script>
+  </body>
+</html>

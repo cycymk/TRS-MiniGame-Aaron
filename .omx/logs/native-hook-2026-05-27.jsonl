@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-27T10:36:36.416Z","type":"native_hook_stdin_parse_error","hook_event_name":"Unknown","error":"Unterminated string in JSON at position 3336 (line 1 column 3337)"}
+{"timestamp":"2026-05-27T10:49:59.161Z","type":"native_hook_stdin_parse_error","hook_event_name":"Unknown","error":"Expected ',' or '}' after property value in JSON at position 39977 (line 1 column 39978)"}

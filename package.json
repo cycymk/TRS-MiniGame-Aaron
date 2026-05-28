@@ -1,0 +1,14 @@
+{
+  "name": "space-hacking-minigame",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "npx http-server . -p 4173 -c-1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "playwright": "^1.53.0"
+  }
+}
