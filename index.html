@@ -8,24 +8,48 @@
   </head>
   <body>
     <main class="game-shell">
+      <img
+        class="scene-backdrop"
+        src="./public/assets/bg-sky.png"
+        alt=""
+        aria-hidden="true"
+      />
+      <div class="scene-grade" aria-hidden="true"></div>
       <canvas id="spaceCanvas" width="1280" height="720" aria-label="space combat view"></canvas>
 
       <section class="ship-panel" aria-label="ship status">
-        <h1>SHIP STATUS</h1>
-        <div class="meter-row">
+        <div class="score-readout">086,520</div>
+        <div class="shard-readout">
+          <span class="shard-icon"></span>
+          <span>
+            <b>DATA SHARD</b>
+            <strong>236</strong>
+          </span>
+        </div>
+        <div class="meter-row compact">
           <span>HP</span>
           <div class="meter"><i id="hpBar"></i></div>
         </div>
-        <div class="meter-row">
+        <div class="meter-row compact">
           <span>AMMO</span>
           <div class="meter ammo"><i id="ammoBar"></i></div>
         </div>
       </section>
 
       <section class="boss-panel" aria-label="boss status">
-        <div class="boss-title">MOTHERSHIP NEMESIS</div>
+        <div class="boss-title">MOTHERSHIP "NEMESIS"</div>
         <div class="boss-meter"><i id="bossBar"></i></div>
         <div id="damageReadout" class="damage-readout">DAMAGE READY</div>
+      </section>
+
+      <section class="fever-panel" aria-label="fever status">
+        <div class="fever-ring">
+          <span>LIGHTNING</span>
+        </div>
+        <div>
+          <b>FEVER</b>
+          <strong>72%</strong>
+        </div>
       </section>
 
       <section id="timerPanel" class="timer-panel hidden" aria-label="bullet time">
@@ -35,10 +59,13 @@
       <section id="hackPanel" class="hack-panel hidden" aria-label="hacking minigame">
         <header>
           <div>
-            <h2>HACKING MINIGAME</h2>
-            <p>START &gt; ROUTE &gt; CORE / NUM 8 2 4 6</p>
+            <h2>HACKING</h2>
+            <p>ROUTE TO CORE / NUM 8 2 4 6</p>
           </div>
-          <div id="boostCounter" class="boost-counter">x1</div>
+          <div>
+            <span class="damage-label">damage</span>
+            <div id="boostCounter" class="boost-counter">x1</div>
+          </div>
         </header>
         <div id="hackGrid" class="hack-grid"></div>
         <footer>
@@ -47,16 +74,37 @@
         </footer>
       </section>
 
-      <section class="cockpit-frame" aria-hidden="true">
-        <img src="./public/assets/space-hacking-mockup.png" alt="" />
+      <section class="weapon-dock" aria-label="weapon select">
+        <button class="weapon active" type="button" data-weapon="machine" aria-label="machine gun">
+          III<small>MG</small>
+        </button>
+        <button class="weapon" type="button" data-weapon="spread" aria-label="spread shot">
+          SP<small>MID</small>
+        </button>
+        <button class="weapon" type="button" data-weapon="laser" aria-label="laser beam">
+          LZ<small>HIGH</small>
+        </button>
       </section>
 
-      <section class="control-strip" aria-label="controls">
-        <span>&#8592; / 4</span>
-        <span>&#8594; / 6</span>
-        <span>0 FIRE</span>
-        <span>+ HACK</span>
+      <section class="control-strip" aria-label="flight controls">
+        <button id="moveLeftButton" class="control-button move" type="button" aria-label="move left">
+          <span aria-hidden="true">&#8592;</span>
+          <small>4 HOLD</small>
+        </button>
+        <button id="fireButton" class="control-button fire" type="button" aria-label="fire">
+          <span>FIRE</span>
+          <small>0</small>
+        </button>
+        <button id="moveRightButton" class="control-button move" type="button" aria-label="move right">
+          <span aria-hidden="true">&#8594;</span>
+          <small>6 HOLD</small>
+        </button>
       </section>
+
+      <button id="hackButton" class="hack-action-button" type="button" aria-label="open hacking minigame">
+        <span>HACK</span>
+        <small>+</small>
+      </button>
 
       <div id="toast" class="toast hidden" role="status"></div>
     </main>
