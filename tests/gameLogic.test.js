@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BOARD_SIZE,
+  applyShieldedBossDamage,
   createInitialHackState,
   createRandomHackBoard,
   createLaserDamage,
@@ -94,6 +95,32 @@ test("boost nodes increase charged hack damage while normal laser hits stay low"
   assert.equal(createLaserDamage(() => 0.999), 3);
 });
 
+test("boss shield absorbs damage before hull damage applies", () => {
+  const shieldedHit = applyShieldedBossDamage({
+    bossHp: 180,
+    bossShieldHp: 30,
+    baseDamage: 16,
+  });
+
+  assert.equal(shieldedHit.bossHp, 180);
+  assert.equal(shieldedHit.bossShieldHp, 14);
+  assert.equal(shieldedHit.shieldDamage, 16);
+  assert.equal(shieldedHit.hullDamage, 0);
+
+  const breakingHit = applyShieldedBossDamage({
+    bossHp: 180,
+    bossShieldHp: 6,
+    baseDamage: 16,
+    isCooldown: true,
+  });
+
+  assert.equal(breakingHit.bossShieldHp, 0);
+  assert.equal(breakingHit.shieldBroken, true);
+  assert.equal(breakingHit.shieldDamage, 6);
+  assert.equal(breakingHit.hullDamage, 30);
+  assert.equal(breakingHit.bossHp, 150);
+});
+
 test("timer expiry fails an unresolved hack", () => {
   const state = createInitialHackState({ now: 1000 });
 
@@ -127,6 +154,9 @@ test("flight controls support arrows and numpad keys", () => {
   assert.equal(mapFlightInput({ key: "4", code: "Numpad4" }), "moveLeft");
   assert.equal(mapFlightInput({ key: "6", code: "Numpad6" }), "moveRight");
   assert.equal(mapFlightInput({ key: "0", code: "Numpad0" }), "fire");
+  assert.equal(mapFlightInput({ key: "Delete", code: "Delete" }), "switchWeapon");
+  assert.equal(mapFlightInput({ key: ".", code: "Period" }), "switchWeapon");
+  assert.equal(mapFlightInput({ key: ".", code: "NumpadDecimal" }), "switchWeapon");
   assert.equal(mapFlightInput({ key: "+", code: "NumpadAdd" }), "hack");
 });
 

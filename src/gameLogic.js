@@ -169,6 +169,32 @@ export function createLaserDamage(random = Math.random) {
   return 1 + Math.floor(clamp(random(), 0, 0.999999) * 3);
 }
 
+export function applyShieldedBossDamage({
+  bossHp = 180,
+  bossShieldHp = 0,
+  baseDamage = 0,
+  isCooldown = false,
+  cooldownMultiplier = 3,
+} = {}) {
+  const incomingDamage = Math.max(0, baseDamage);
+  const shieldBefore = Math.max(0, bossShieldHp);
+  const shieldDamage = Math.min(shieldBefore, incomingDamage);
+  const nextBossShieldHp = Math.max(0, shieldBefore - shieldDamage);
+  const overflowDamage = Math.max(0, incomingDamage - shieldDamage);
+  const multiplier = isCooldown && nextBossShieldHp <= 0 ? cooldownMultiplier : 1;
+  const hullDamage = overflowDamage * multiplier;
+
+  return {
+    bossHp: Math.max(0, bossHp - hullDamage),
+    bossShieldHp: nextBossShieldHp,
+    displayDamage: hullDamage > 0 ? hullDamage : shieldDamage,
+    hullDamage,
+    shieldDamage,
+    shieldBefore,
+    shieldBroken: shieldBefore > 0 && nextBossShieldHp <= 0,
+  };
+}
+
 export function randomBoostMultiplier(random = Math.random) {
   return 10 + Math.floor(clamp(random(), 0, 0.999999) * 21);
 }
@@ -185,6 +211,16 @@ export function mapFlightInput(eventLike) {
   }
   if (key === "Alt" || code === "Numpad0" || key === "0") {
     return "fire";
+  }
+  if (
+    key === "Delete" ||
+    key === "Del" ||
+    key === "." ||
+    code === "Delete" ||
+    code === "Period" ||
+    code === "NumpadDecimal"
+  ) {
+    return "switchWeapon";
   }
   if (key === "Control" || code === "NumpadAdd" || key === "+") {
     return "hack";

@@ -1,6 +1,7 @@
 import {
   HACK_DURATION_MS,
   NODE_LABELS,
+  applyShieldedBossDamage,
   createInitialHackState,
   createLaserDamage,
   createRandomHackBoard,
@@ -21,6 +22,7 @@ bossImage.src = new URL("../public/assets/boss-mothership.png", import.meta.url)
 const hpBar = document.querySelector("#hpBar");
 const ammoBar = document.querySelector("#ammoBar");
 const bossBar = document.querySelector("#bossBar");
+const bossShieldBar = document.querySelector("#bossShieldBar");
 const damageReadout = document.querySelector("#damageReadout");
 const timerPanel = document.querySelector("#timerPanel");
 const timerValue = document.querySelector("#timerValue");
@@ -50,7 +52,10 @@ const hazards = Array.from({ length: 18 }, (_, index) => ({
 }));
 const shots = [];
 const blasts = [];
+const shieldImpacts = [];
 
+const BOSS_MAX_HP = 180;
+const BOSS_MAX_SHIELD = 90;
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -92,7 +97,8 @@ const game = {
   laneTarget: 1,
   hp: 100,
   ammo: 100,
-  bossHp: 180,
+  bossHp: BOSS_MAX_HP,
+  bossShieldHp: BOSS_MAX_SHIELD,
   hack: null,
   boostMultiplierPreview: 1,
   travel: 0,
@@ -149,23 +155,29 @@ function fireWeapon(now = performance.now()) {
     return;
   }
 
-  const baseDamage = weapon.damage;
-  const damage = applyBossDamage(baseDamage);
+  const hit = applyBossDamage(weapon.damage);
   game.lastShotAt = now;
   game.ammo = Math.max(0, game.ammo - weapon.ammoCost);
+  recordShieldImpact(hit, now, game.selectedWeapon);
   shots.push({
     born: now,
     type: game.selectedWeapon,
-    damage,
+    damage: hit.displayDamage,
     lane: game.lane,
     laneTarget: game.laneTarget,
     seed: Math.random() * Math.PI * 2,
+    shielded: hit.shieldDamage > 0,
   });
-  blasts.push({ born: now, damage, small: game.selectedWeapon !== "laser", type: game.selectedWeapon });
-  damageReadout.textContent =
-    game.bossMode === "cooldown"
-      ? `WEAK POINT HIT ${damage}`
-      : `${weapon.readout} ${damage}`;
+  blasts.push({
+    born: now,
+    damage: hit.displayDamage,
+    small: game.selectedWeapon !== "laser",
+    type: game.selectedWeapon,
+    lane: game.lane,
+    laneTarget: game.laneTarget,
+    shielded: hit.shieldDamage > 0,
+  });
+  damageReadout.textContent = formatWeaponReadout(weapon, hit);
   maybeResetBoss();
 }
 
@@ -181,11 +193,20 @@ function resolveHack(status) {
       boostsCollected: game.hack.boostsCollected,
       random: Math.random,
     });
-    const damage = applyBossDamage(chargedBaseDamage);
+    const hit = applyBossDamage(chargedBaseDamage);
+    recordShieldImpact(hit, performance.now(), "hack");
     game.ammo = Math.min(100, game.ammo + 26);
-    blasts.push({ born: performance.now(), damage });
-    damageReadout.textContent = `CHARGED OUTPUT ${damage}`;
-    setToast(`HACK SUCCESS / DAMAGE ${damage}`, 1400);
+    blasts.push({
+      born: performance.now(),
+      damage: hit.displayDamage,
+      type: "hack",
+      shielded: hit.shieldDamage > 0,
+    });
+    damageReadout.textContent =
+      hit.hullDamage > 0
+        ? `CHARGED OUTPUT ${hit.hullDamage}`
+        : `SHIELD OUTPUT ${hit.shieldDamage}`;
+    setToast(`HACK SUCCESS / DAMAGE ${hit.displayDamage}`, 1400);
   } else {
     game.hp = Math.max(0, game.hp - 40);
     damageReadout.textContent = "HEAVY DAMAGE";
@@ -203,7 +224,8 @@ function maybeResetBoss() {
     return;
   }
 
-  game.bossHp = 180;
+  game.bossHp = BOSS_MAX_HP;
+  game.bossShieldHp = BOSS_MAX_SHIELD;
   game.hp = Math.min(100, game.hp + 8);
   game.bossMode = "normal";
   game.bossModeStartedAt = performance.now();
@@ -212,13 +234,51 @@ function maybeResetBoss() {
 }
 
 function applyBossDamage(baseDamage) {
-  const multiplier = game.bossMode === "cooldown" ? 3 : 1;
-  const damage = baseDamage * multiplier;
-  game.bossHp = Math.max(0, game.bossHp - damage);
-  if (multiplier > 1) {
+  const hit = applyShieldedBossDamage({
+    bossHp: game.bossHp,
+    bossShieldHp: game.bossShieldHp,
+    baseDamage,
+    isCooldown: game.bossMode === "cooldown",
+  });
+
+  game.bossHp = hit.bossHp;
+  game.bossShieldHp = hit.bossShieldHp;
+
+  if (game.bossMode === "cooldown" && hit.hullDamage > 0) {
     game.speedPulse = 1;
   }
-  return damage;
+
+  return hit;
+}
+
+function recordShieldImpact(hit, now = performance.now(), type = "machine") {
+  if (hit.shieldDamage <= 0) {
+    return;
+  }
+
+  shieldImpacts.push({
+    born: now,
+    type,
+    damage: hit.shieldDamage,
+    seed: Math.random() * Math.PI * 2,
+    broken: hit.shieldBroken,
+  });
+}
+
+function formatWeaponReadout(weapon, hit) {
+  if (hit.shieldDamage > 0 && hit.hullDamage <= 0) {
+    return hit.shieldBroken
+      ? `SHIELD BREAK ${hit.shieldDamage}`
+      : `SHIELD ABSORB ${hit.shieldDamage}`;
+  }
+
+  if (hit.shieldDamage > 0 && hit.hullDamage > 0) {
+    return `SHIELD BREAK / ${weapon.readout} ${hit.hullDamage}`;
+  }
+
+  return game.bossMode === "cooldown"
+    ? `WEAK POINT HIT ${hit.hullDamage}`
+    : `${weapon.readout} ${hit.hullDamage}`;
 }
 
 function updateBoss(now, delta) {
@@ -463,7 +523,8 @@ function update(now) {
 function updateHud() {
   hpBar.style.width = `${game.hp}%`;
   ammoBar.style.width = `${game.ammo}%`;
-  bossBar.style.width = `${(game.bossHp / 180) * 100}%`;
+  bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
+  bossShieldBar.style.width = `${(game.bossShieldHp / BOSS_MAX_SHIELD) * 100}%`;
 }
 
 function draw(now) {
@@ -478,6 +539,7 @@ function draw(now) {
   drawBoss(width, height, now);
   drawShip(width, height, now);
   drawShots(width, height, now);
+  drawActiveBossBeam(width, height, now);
 
   if (game.mode === "hack") {
     drawBulletTimeOverlay(width, height);
@@ -630,10 +692,6 @@ function drawBoss(width, height, now) {
   const drawX = pose.x + (attack ? Math.sin(now * (0.018 + chargeProgress * 0.04)) * shake : 0);
   const drawY = pose.y + (attack ? Math.cos(now * (0.023 + chargeProgress * 0.05)) * shake : 0);
 
-  if (game.bossMode === "beam") {
-    drawBossBeam(width, height, drawX, drawY, bossSize, now);
-  }
-
   ctx.save();
   ctx.translate(drawX, drawY);
   drawBossRings(bossSize, ringRotation, chargeProgress, cooldown);
@@ -649,11 +707,30 @@ function drawBoss(width, height, now) {
 
   ctx.globalAlpha = 1;
   drawBossCore(bossSize, now, chargeProgress, cooldown);
+  drawBossShield(bossSize, now, chargeProgress, cooldown);
   if (game.bossMode === "charging") {
     drawCoreParticles(bossSize, now, chargeProgress);
     drawChargeCountdown(bossSize, chargeProgress);
   }
   ctx.restore();
+}
+
+function drawActiveBossBeam(width, height, now) {
+  if (game.bossMode !== "beam") {
+    return;
+  }
+
+  const pose = getBossPose(width, height, now);
+  const bossSize = Math.min(width * 0.3, height * 0.48);
+  const shake = 4 + Math.sin(now * 0.07) * 2;
+  drawBossBeam(
+    width,
+    height,
+    pose.x + Math.sin(now * 0.045) * shake,
+    pose.y + Math.cos(now * 0.052) * shake,
+    bossSize,
+    now,
+  );
 }
 
 function getBossPose(width, height) {
@@ -708,6 +785,80 @@ function drawBossCore(size, now, chargeProgress, cooldown) {
   ctx.restore();
 }
 
+function drawBossShield(size, now, chargeProgress, cooldown) {
+  const shieldRatio = game.bossShieldHp / BOSS_MAX_SHIELD;
+  const hasRecentImpact = shieldImpacts.some((impact) => now - impact.born < 620);
+  if (shieldRatio <= 0 && !hasRecentImpact) {
+    return;
+  }
+
+  const baseAlpha = shieldRatio > 0 ? 0.18 + shieldRatio * 0.28 : 0.1;
+  const pulse = 0.85 + Math.sin(now * 0.006) * 0.12 + chargeProgress * 0.12;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = cooldown
+    ? `rgba(121, 83, 177, ${baseAlpha * 0.7})`
+    : `rgba(190, 101, 255, ${baseAlpha})`;
+  ctx.fillStyle = `rgba(123, 62, 255, ${baseAlpha * 0.26})`;
+  ctx.shadowColor = "rgba(183, 85, 255, 0.74)";
+  ctx.shadowBlur = 22;
+  ctx.lineWidth = Math.max(2, size * 0.011);
+
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size * 0.54 * pulse, size * 0.42 * pulse, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(124, 245, 255, ${baseAlpha * 0.86})`;
+  ctx.lineWidth = Math.max(1.4, size * 0.004);
+  ctx.setLineDash([size * 0.032, size * 0.018]);
+  ctx.lineDashOffset = -now * 0.04;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, size * 0.59 * pulse, size * 0.46 * pulse, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (let i = shieldImpacts.length - 1; i >= 0; i -= 1) {
+    const impact = shieldImpacts[i];
+    const age = now - impact.born;
+    if (age > 620) {
+      shieldImpacts.splice(i, 1);
+      continue;
+    }
+
+    const alpha = 1 - age / 620;
+    const angle = impact.seed;
+    const radiusX = size * 0.48;
+    const radiusY = size * 0.36;
+    const x = Math.cos(angle) * radiusX;
+    const y = Math.sin(angle) * radiusY;
+    const ripple = size * (0.035 + age * 0.00042) * (impact.broken ? 1.8 : 1);
+
+    ctx.strokeStyle = impact.broken
+      ? `rgba(255, 236, 255, ${0.9 * alpha})`
+      : `rgba(221, 170, 255, ${0.78 * alpha})`;
+    ctx.fillStyle = `rgba(166, 88, 255, ${0.22 * alpha})`;
+    ctx.lineWidth = Math.max(1.4, size * 0.008 * alpha);
+    ctx.shadowBlur = impact.broken ? 36 : 20;
+    ctx.beginPath();
+    ctx.arc(x, y, ripple, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(124, 248, 255, ${0.7 * alpha})`;
+    ctx.lineWidth = Math.max(1, size * 0.004);
+    ctx.beginPath();
+    ctx.moveTo(x - ripple * 1.4, y);
+    ctx.lineTo(x + ripple * 1.4, y);
+    ctx.moveTo(x, y - ripple * 1.4);
+    ctx.lineTo(x, y + ripple * 1.4);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 function drawCoreParticles(size, now, chargeProgress) {
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
@@ -740,15 +891,16 @@ function drawChargeCountdown(size, chargeProgress) {
 function drawBossBeam(width, height, centerX, centerY, bossSize, now) {
   const age = now - game.bossModeStartedAt;
   const pulse = 0.85 + Math.sin(now * 0.055) * 0.16;
-  const targetX = width * (0.5 + lanes[Math.round(game.lane)] * 0.11);
-  const targetY = height * 0.82;
+  const shipPose = getShipPose(width, height);
+  const targetX = shipPose.x + Math.sin(age * 0.014) * width * 0.018;
+  const targetY = height * 1.16;
   const dx = targetX - centerX;
   const dy = targetY - centerY;
   const length = Math.max(1, Math.hypot(dx, dy));
   const nx = -dy / length;
   const ny = dx / length;
-  const topWidth = bossSize * 0.035;
-  const bottomWidth = bossSize * (0.24 + pulse * 0.07);
+  const topWidth = bossSize * 0.026;
+  const bottomWidth = bossSize * (0.37 + pulse * 0.11);
   const shimmer = Math.sin(age * 0.045) * bossSize * 0.012;
 
   const outerGradient = ctx.createLinearGradient(centerX, centerY, targetX, targetY);
@@ -763,13 +915,22 @@ function drawBossBeam(width, height, centerX, centerY, bossSize, now) {
   coreGradient.addColorStop(1, "rgba(255, 72, 86, 0.5)");
 
   ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "rgba(255, 22, 48, 0.2)";
+  drawBeamCone(centerX, centerY, targetX, targetY, nx, ny, topWidth * 4.8, bottomWidth * 1.7, ctx.fillStyle, shimmer * 1.8);
+
   ctx.globalCompositeOperation = "lighter";
   ctx.shadowColor = "rgba(255, 23, 43, 0.95)";
-  ctx.shadowBlur = 38;
+  ctx.shadowBlur = 46;
 
-  drawBeamCone(centerX, centerY, targetX, targetY, nx, ny, topWidth * 2.2, bottomWidth * 1.42, outerGradient, shimmer);
-  ctx.shadowBlur = 18;
-  drawBeamCone(centerX, centerY, targetX, targetY, nx, ny, topWidth * 0.95, bottomWidth * 0.42, coreGradient, -shimmer * 0.5);
+  drawBeamCone(centerX, centerY, targetX, targetY, nx, ny, topWidth * 2.6, bottomWidth * 1.24, outerGradient, shimmer);
+  ctx.shadowBlur = 24;
+  drawBeamCone(centerX, centerY, targetX, targetY, nx, ny, topWidth * 1.1, bottomWidth * 0.36, coreGradient, -shimmer * 0.5);
+
+  ctx.fillStyle = `rgba(255, 247, 238, ${0.78 + Math.sin(age * 0.06) * 0.16})`;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, bossSize * 0.042, 0, Math.PI * 2);
+  ctx.fill();
 
   ctx.strokeStyle = `rgba(255, 217, 206, ${0.58 + Math.sin(age * 0.03) * 0.18})`;
   ctx.lineWidth = Math.max(1.5, bossSize * 0.012);
@@ -780,7 +941,7 @@ function drawBossBeam(width, height, centerX, centerY, bossSize, now) {
   ctx.lineTo(targetX - nx * bottomWidth, targetY - ny * bottomWidth);
   ctx.stroke();
 
-  ctx.fillStyle = "rgba(255, 46, 56, 0.28)";
+  ctx.fillStyle = "rgba(255, 46, 56, 0.32)";
   ctx.beginPath();
   ctx.ellipse(targetX, targetY, bottomWidth * 0.72, bottomWidth * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
@@ -941,41 +1102,212 @@ function drawFallbackShip(now) {
 }
 
 function drawShots(width, height, now) {
-  const bossPose = getBossPose(width, height, now);
   for (let i = shots.length - 1; i >= 0; i -= 1) {
-    const age = now - shots[i].born;
-    if (age > 180) {
+    const shot = shots[i];
+    const age = now - shot.born;
+    const lifetime =
+      shot.type === "laser" ? 920 : shot.type === "spread" ? 300 : 170;
+    if (age > lifetime) {
       shots.splice(i, 1);
       continue;
     }
-    const alpha = 1 - age / 180;
-    ctx.strokeStyle = `rgba(90, 224, 255, ${alpha})`;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(width * 0.5, height * 0.74);
-    ctx.lineTo(bossPose.x, bossPose.y);
-    ctx.stroke();
+
+    const alpha = 1 - age / lifetime;
+    if (shot.type === "laser") {
+      drawPlayerLaser(width, height, shot, age, alpha);
+    } else if (shot.type === "spread") {
+      drawSpreadShot(width, height, shot, age, alpha);
+    } else {
+      drawMachineTracer(width, height, shot, age, alpha);
+    }
   }
 
   for (let i = blasts.length - 1; i >= 0; i -= 1) {
-    const age = now - blasts[i].born;
-    const lifetime = blasts[i].small ? 240 : 720;
+    const blast = blasts[i];
+    const age = now - blast.born;
+    const lifetime = blast.small ? 240 : 720;
     if (age > lifetime) {
       blasts.splice(i, 1);
       continue;
     }
     const alpha = 1 - age / lifetime;
+    const target = getForwardVanishPoint(width, height, blast);
+    const radius = blast.type === "spread" ? 16 : blast.type === "machine" ? 10 : 28;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     ctx.strokeStyle = `rgba(125, 241, 255, ${alpha})`;
-    ctx.lineWidth = blasts[i].small ? 5 * alpha + 2 : 16 * alpha + 8;
+    ctx.lineWidth = blast.small ? 2.5 : 4.5;
     ctx.beginPath();
-    const offset = blasts[i].small ? Math.sin(age * 0.04) * width * 0.02 : 0;
-    ctx.moveTo(width * 0.5 + offset, height * 0.76);
-    ctx.lineTo(bossPose.x, bossPose.y);
+    ctx.arc(target.x, target.y, radius * (1 + age / lifetime), 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = blast.small ? 1 : 2;
     ctx.stroke();
+    ctx.restore();
   }
+}
+
+function drawMachineTracer(width, height, shot, age, alpha) {
+  const muzzle = getShipMuzzle(width, height, shot);
+  const target = getForwardVanishPoint(width, height, shot);
+  const progress = Math.min(1, age / 160);
+  const tail = Math.max(0, progress - 0.24);
+  const start = lerpPoint(muzzle, target, tail);
+  const end = lerpPoint(muzzle, target, Math.min(1, progress + 0.12));
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "rgba(102, 236, 255, 0.92)";
+  ctx.shadowBlur = 12;
+  ctx.strokeStyle = `rgba(145, 245, 255, ${0.86 * alpha})`;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+  ctx.strokeStyle = `rgba(255, 255, 255, ${0.74 * alpha})`;
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawSpreadShot(width, height, shot, age, alpha) {
+  const muzzle = getShipMuzzle(width, height, shot);
+  const target = getForwardVanishPoint(width, height, shot);
+  const progress = Math.min(1, age / 260);
+  const spreadOffsets = [-0.055, 0, 0.055];
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "rgba(255, 196, 92, 0.86)";
+  ctx.shadowBlur = 16;
+
+  spreadOffsets.forEach((offset, index) => {
+    const side = offset * width * (0.25 + progress * 0.85);
+    const endTarget = {
+      x: target.x + side,
+      y: target.y + Math.abs(offset) * height * 0.035,
+    };
+    const start = lerpPoint(muzzle, endTarget, Math.max(0, progress - 0.12));
+    const end = lerpPoint(muzzle, endTarget, progress);
+    const pulse = 0.75 + Math.sin(age * 0.08 + shot.seed + index) * 0.25;
+
+    ctx.strokeStyle =
+      index === 1
+        ? `rgba(129, 239, 255, ${0.72 * alpha})`
+        : `rgba(255, 211, 91, ${0.78 * alpha})`;
+    ctx.lineWidth = 2.6 + pulse;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+
+    ctx.fillStyle = `rgba(255, 252, 222, ${0.82 * alpha})`;
+    ctx.beginPath();
+    ctx.arc(end.x, end.y, 3.4 + pulse * 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawPlayerLaser(width, height, shot, age, alpha) {
+  const muzzle = getShipMuzzle(width, height, shot);
+  const target = getForwardVanishPoint(width, height, shot);
+  const dx = target.x - muzzle.x;
+  const dy = target.y - muzzle.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const shimmer = Math.sin(age * 0.08 + shot.seed) * 2.5;
+  const outerGradient = ctx.createLinearGradient(muzzle.x, muzzle.y, target.x, target.y);
+  const coreGradient = ctx.createLinearGradient(muzzle.x, muzzle.y, target.x, target.y);
+
+  outerGradient.addColorStop(0, `rgba(62, 221, 255, ${0.68 * alpha})`);
+  outerGradient.addColorStop(0.42, `rgba(86, 166, 255, ${0.62 * alpha})`);
+  outerGradient.addColorStop(1, `rgba(121, 240, 255, ${0.18 * alpha})`);
+  coreGradient.addColorStop(0, `rgba(246, 255, 255, ${alpha})`);
+  coreGradient.addColorStop(0.55, `rgba(117, 235, 255, ${0.88 * alpha})`);
+  coreGradient.addColorStop(1, `rgba(184, 251, 255, ${0.42 * alpha})`);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.shadowColor = "rgba(92, 229, 255, 0.72)";
+  ctx.shadowBlur = 22;
+  drawBeamCone(
+    muzzle.x,
+    muzzle.y,
+    target.x,
+    target.y,
+    nx,
+    ny,
+    42,
+    8,
+    `rgba(78, 220, 255, ${0.84 * alpha})`,
+    shimmer * 0.4,
+  );
+
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "rgba(80, 219, 255, 0.96)";
+  ctx.shadowBlur = 36;
+  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 23, 4.5, outerGradient, shimmer);
+  ctx.shadowBlur = 18;
+  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 8, 1.4, coreGradient, -shimmer * 0.35);
+
+  ctx.strokeStyle = `rgba(238, 255, 255, ${Math.min(1, 0.32 + 0.68 * alpha)})`;
+  ctx.lineCap = "round";
+  ctx.lineWidth = 15;
+  ctx.beginPath();
+  ctx.moveTo(muzzle.x, muzzle.y);
+  ctx.lineTo(target.x, target.y);
+  ctx.stroke();
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.shadowColor = "rgba(135, 238, 255, 0.95)";
+  ctx.shadowBlur = 18;
+  ctx.strokeStyle = `rgba(233, 255, 255, ${Math.min(1, 0.38 + 0.62 * alpha)})`;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(muzzle.x, muzzle.y);
+  ctx.lineTo(target.x, target.y);
+  ctx.stroke();
+
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = `rgba(104, 231, 255, ${0.78 * alpha})`;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(muzzle.x + nx * 28, muzzle.y + ny * 28);
+  ctx.quadraticCurveTo(
+    (muzzle.x + target.x) * 0.5 + Math.sin(age * 0.06 + shot.seed) * 18,
+    (muzzle.y + target.y) * 0.5,
+    target.x + nx * 4,
+    target.y + ny * 4,
+  );
+  ctx.moveTo(muzzle.x - nx * 28, muzzle.y - ny * 28);
+  ctx.quadraticCurveTo(
+    (muzzle.x + target.x) * 0.5 - Math.sin(age * 0.07 + shot.seed) * 14,
+    (muzzle.y + target.y) * 0.5,
+    target.x - nx * 4,
+    target.y - ny * 4,
+  );
+  ctx.stroke();
+
+  const flare = 12 + Math.sin(age * 0.12 + shot.seed) * 4;
+  ctx.fillStyle = `rgba(232, 253, 255, ${0.78 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(muzzle.x, muzzle.y, flare, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(76, 223, 255, ${0.46 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(muzzle.x, muzzle.y, flare * 1.9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function lerpPoint(start, end, t) {
+  return {
+    x: start.x + (end.x - start.x) * t,
+    y: start.y + (end.y - start.y) * t,
+  };
 }
 
 function drawBulletTimeOverlay(width, height) {
@@ -998,6 +1330,9 @@ function setupHoldControl(button, action) {
     event.preventDefault();
     event.stopPropagation();
     if (game.mode !== "flight") {
+      if (game.mode === "hack") {
+        cancelHack();
+      }
       return;
     }
     button.setPointerCapture?.(event.pointerId);
@@ -1024,7 +1359,22 @@ setupHoldControl(moveRightButton, "moveRight");
 fireButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
-  fireLaser();
+  if (game.mode === "hack") {
+    cancelHack();
+    return;
+  }
+  fireWeapon();
+});
+
+weaponButtons.forEach((button) => {
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (game.mode === "hack") {
+      cancelHack();
+    }
+    setWeapon(button.dataset.weapon);
+  });
 });
 
 hackButton.addEventListener("pointerdown", (event) => {
@@ -1069,12 +1419,15 @@ window.addEventListener("keydown", (event) => {
   } else if (flightAction === "moveRight") {
     moveFlight("moveRight");
   } else if (flightAction === "fire") {
-    fireLaser();
+    fireWeapon();
+  } else if (flightAction === "switchWeapon") {
+    cycleWeapon();
   } else if (flightAction === "hack") {
     enterHack();
   }
 });
 
 resizeCanvas();
+updateWeaponUi();
 updateHud();
 requestAnimationFrame(update);
