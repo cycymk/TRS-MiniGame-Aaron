@@ -253,6 +253,18 @@ body {
   box-shadow: 0 0 14px rgba(182, 104, 255, 0.8);
 }
 
+.boss-meter.shield.break {
+  border-color: rgba(142, 252, 255, 0.96);
+  box-shadow:
+    inset 0 0 11px rgba(127, 244, 255, 0.24),
+    0 0 19px rgba(114, 235, 255, 0.58);
+}
+
+.boss-meter.shield.break i {
+  background: linear-gradient(90deg, #e9fdff, #79f4ff 52%, #b981ff);
+  box-shadow: 0 0 18px rgba(127, 244, 255, 0.92);
+}
+
 .damage-readout {
   margin-top: 0.45rem;
   color: #8cf4ff;
@@ -709,6 +721,48 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+
+.restart-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  background: radial-gradient(circle at 50% 44%, rgba(255, 38, 52, 0.18), rgba(2, 5, 10, 0.48) 58%, rgba(0, 0, 0, 0.72));
+}
+
+.restart-overlay.hidden {
+  display: none;
+}
+
+.restart-overlay div {
+  display: grid;
+  gap: 0.7rem;
+  min-width: min(22rem, 82vw);
+  padding: 1.2rem 1.6rem;
+  border: 1px solid rgba(255, 226, 206, 0.78);
+  border-radius: 6px;
+  color: #fff7ef;
+  text-align: center;
+  background:
+    linear-gradient(135deg, rgba(255, 58, 62, 0.22), rgba(60, 9, 20, 0.44)),
+    rgba(6, 8, 15, 0.82);
+  box-shadow:
+    inset 0 0 28px rgba(255, 94, 72, 0.18),
+    0 0 42px rgba(255, 46, 58, 0.38);
+}
+
+.restart-overlay strong {
+  font-size: clamp(1.6rem, 4vw, 3rem);
+  font-weight: 950;
+}
+
+.restart-overlay span {
+  color: rgba(215, 248, 255, 0.86);
+  font-size: clamp(0.66rem, 1.3vw, 0.95rem);
+  font-weight: 900;
 }
 
 @keyframes cursor-pulse {

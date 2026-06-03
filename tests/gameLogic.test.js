@@ -5,11 +5,10 @@ import {
   applyShieldedBossDamage,
   createInitialHackState,
   createRandomHackBoard,
-  createLaserDamage,
   mapFlightInput,
   mapHackInput,
   moveHackCursor,
-  resolveHackDamage,
+  resolveHackBreakDuration,
   updateHackTimer,
 } from "../src/gameLogic.js";
 
@@ -73,7 +72,7 @@ test("touching a trap fails the hack and reaching the core succeeds", () => {
   assert.equal(coreState.status, "success");
 });
 
-test("boost nodes increase charged hack damage while normal laser hits stay low", () => {
+test("boost nodes are counted when routing through the hack board", () => {
   let state = createInitialHackState({
     board: [
       ["start", "boost", "core", "empty", "empty", "empty"],
@@ -90,35 +89,53 @@ test("boost nodes increase charged hack damage while normal laser hits stay low"
 
   assert.equal(state.boostsCollected, 1);
   assert.equal(state.status, "success");
-  assert.equal(resolveHackDamage({ baseDamage: 2, boostsCollected: 1 }), 40);
-  assert.equal(createLaserDamage(() => 0), 1);
-  assert.equal(createLaserDamage(() => 0.999), 3);
 });
 
-test("boss shield absorbs damage before hull damage applies", () => {
+test("hack success opens a break window that grows by one second per boost", () => {
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 0 }), 4000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 5000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 3 }), 7000);
+});
+
+test("boss shield splits normal damage into cancel, shield, and hull portions", () => {
   const shieldedHit = applyShieldedBossDamage({
     bossHp: 180,
     bossShieldHp: 30,
-    baseDamage: 16,
+    baseDamage: 100,
   });
 
-  assert.equal(shieldedHit.bossHp, 180);
-  assert.equal(shieldedHit.bossShieldHp, 14);
-  assert.equal(shieldedHit.shieldDamage, 16);
-  assert.equal(shieldedHit.hullDamage, 0);
+  assert.equal(shieldedHit.bossHp, 178);
+  assert.equal(shieldedHit.bossShieldHp, 22);
+  assert.equal(shieldedHit.canceledDamage, 90);
+  assert.equal(shieldedHit.shieldDamage, 8);
+  assert.equal(shieldedHit.hullDamage, 2);
+});
 
-  const breakingHit = applyShieldedBossDamage({
+test("break state damage is less shielded and broken shield exposes full hull damage", () => {
+  const breakHit = applyShieldedBossDamage({
     bossHp: 180,
-    bossShieldHp: 6,
-    baseDamage: 16,
-    isCooldown: true,
+    bossShieldHp: 90,
+    baseDamage: 100,
+    damageProfile: "break",
   });
 
-  assert.equal(breakingHit.bossShieldHp, 0);
-  assert.equal(breakingHit.shieldBroken, true);
-  assert.equal(breakingHit.shieldDamage, 6);
-  assert.equal(breakingHit.hullDamage, 30);
-  assert.equal(breakingHit.bossHp, 150);
+  assert.equal(breakHit.bossHp, 170);
+  assert.equal(breakHit.bossShieldHp, 20);
+  assert.equal(breakHit.canceledDamage, 20);
+  assert.equal(breakHit.shieldDamage, 70);
+  assert.equal(breakHit.hullDamage, 10);
+
+  const exposedHit = applyShieldedBossDamage({
+    bossHp: 170,
+    bossShieldHp: 0,
+    baseDamage: 100,
+  });
+
+  assert.equal(exposedHit.bossHp, 70);
+  assert.equal(exposedHit.bossShieldHp, 0);
+  assert.equal(exposedHit.canceledDamage, 0);
+  assert.equal(exposedHit.shieldDamage, 0);
+  assert.equal(exposedHit.hullDamage, 100);
 });
 
 test("timer expiry fails an unresolved hack", () => {

@@ -3,13 +3,12 @@ import {
   NODE_LABELS,
   applyShieldedBossDamage,
   createInitialHackState,
-  createLaserDamage,
   createRandomHackBoard,
   mapFlightInput,
   mapHackInput,
   moveHackCursor,
   randomBoostMultiplier,
-  resolveHackDamage,
+  resolveHackBreakDuration,
   updateHackTimer,
 } from "./gameLogic.js";
 
@@ -36,6 +35,7 @@ const moveRightButton = document.querySelector("#moveRightButton");
 const fireButton = document.querySelector("#fireButton");
 const hackButton = document.querySelector("#hackButton");
 const weaponButtons = Array.from(document.querySelectorAll("[data-weapon]"));
+const restartOverlay = document.querySelector("#restartOverlay");
 const toast = document.querySelector("#toast");
 
 const lanes = [-0.38, 0, 0.38];
@@ -56,6 +56,8 @@ const shieldImpacts = [];
 
 const BOSS_MAX_HP = 180;
 const BOSS_MAX_SHIELD = 90;
+const BOSS_SHIELD_RESTORE_DELAY_MS = 6000;
+const BOSS_SHIELD_RESTORE_AMOUNT = BOSS_MAX_SHIELD;
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -109,6 +111,10 @@ const game = {
   bossMode: "normal",
   bossModeStartedAt: performance.now(),
   bossBeamHitAt: 0,
+  bossShieldBrokenAt: 0,
+  bossBreakUntil: 0,
+  bossDefeated: false,
+  bossDefeatedAt: 0,
   bossPose: { x: 0.5, y: 0.34 },
   lastTime: performance.now(),
 };
@@ -122,7 +128,7 @@ function resizeCanvas() {
 }
 
 function enterHack(now = performance.now()) {
-  if (game.mode === "hack") {
+  if (game.mode === "hack" || game.bossDefeated) {
     return;
   }
 
@@ -148,6 +154,7 @@ function fireWeapon(now = performance.now()) {
   const weapon = weaponConfigs[game.selectedWeapon];
   if (
     game.mode !== "flight" ||
+    game.bossDefeated ||
     !weapon ||
     game.ammo < weapon.ammoCost ||
     now - game.lastShotAt < weapon.cooldown
@@ -155,7 +162,7 @@ function fireWeapon(now = performance.now()) {
     return;
   }
 
-  const hit = applyBossDamage(weapon.damage);
+  const hit = applyBossDamage(weapon.damage, isBossBreakActive() ? "break" : "normal");
   game.lastShotAt = now;
   game.ammo = Math.max(0, game.ammo - weapon.ammoCost);
   recordShieldImpact(hit, now, game.selectedWeapon);
@@ -187,26 +194,14 @@ function resolveHack(status) {
   }
 
   if (status === "success") {
-    const baseDamage = createLaserDamage();
-    const chargedBaseDamage = resolveHackDamage({
-      baseDamage,
+    const now = performance.now();
+    const breakDuration = resolveHackBreakDuration({
       boostsCollected: game.hack.boostsCollected,
-      random: Math.random,
     });
-    const hit = applyBossDamage(chargedBaseDamage);
-    recordShieldImpact(hit, performance.now(), "hack");
+    game.bossBreakUntil = Math.max(game.bossBreakUntil, now + breakDuration);
     game.ammo = Math.min(100, game.ammo + 26);
-    blasts.push({
-      born: performance.now(),
-      damage: hit.displayDamage,
-      type: "hack",
-      shielded: hit.shieldDamage > 0,
-    });
-    damageReadout.textContent =
-      hit.hullDamage > 0
-        ? `CHARGED OUTPUT ${hit.hullDamage}`
-        : `SHIELD OUTPUT ${hit.shieldDamage}`;
-    setToast(`HACK SUCCESS / DAMAGE ${hit.displayDamage}`, 1400);
+    damageReadout.textContent = `SHIELD BREAK ${formatTimeSeconds(breakDuration)}`;
+    setToast(`HACK SUCCESS / BREAK ${formatTimeSeconds(breakDuration)}`, 1400);
   } else {
     game.hp = Math.max(0, game.hp - 40);
     damageReadout.textContent = "HEAVY DAMAGE";
@@ -224,31 +219,45 @@ function maybeResetBoss() {
     return;
   }
 
-  game.bossHp = BOSS_MAX_HP;
-  game.bossShieldHp = BOSS_MAX_SHIELD;
-  game.hp = Math.min(100, game.hp + 8);
-  game.bossMode = "normal";
-  game.bossModeStartedAt = performance.now();
-  game.bossBeamHitAt = 0;
-  setToast("MONSTER KNOCKBACK / NEXT TARGET", 1300);
+  defeatBoss();
 }
 
-function applyBossDamage(baseDamage) {
+function applyBossDamage(baseDamage, damageProfile = "normal") {
+  if (game.bossDefeated) {
+    return {
+      displayDamage: 0,
+      hullDamage: 0,
+      shieldDamage: 0,
+      shieldBefore: game.bossShieldHp,
+      canceledDamage: 0,
+      shieldActive: false,
+      shieldBroken: false,
+    };
+  }
+
   const hit = applyShieldedBossDamage({
     bossHp: game.bossHp,
     bossShieldHp: game.bossShieldHp,
     baseDamage,
-    isCooldown: game.bossMode === "cooldown",
+    damageProfile,
   });
 
   game.bossHp = hit.bossHp;
   game.bossShieldHp = hit.bossShieldHp;
 
-  if (game.bossMode === "cooldown" && hit.hullDamage > 0) {
+  if (hit.shieldBroken) {
+    game.bossShieldBrokenAt = performance.now();
+  }
+
+  if (game.bossMode === "cooldown" && game.bossShieldHp <= 0 && hit.hullDamage > 0) {
     game.speedPulse = 1;
   }
 
   return hit;
+}
+
+function isBossBreakActive(now = performance.now()) {
+  return !game.bossDefeated && game.bossBreakUntil > now;
 }
 
 function recordShieldImpact(hit, now = performance.now(), type = "machine") {
@@ -266,22 +275,109 @@ function recordShieldImpact(hit, now = performance.now(), type = "machine") {
 }
 
 function formatWeaponReadout(weapon, hit) {
+  const prefix = isBossBreakActive() ? "BREAK HIT" : weapon.readout;
+
   if (hit.shieldDamage > 0 && hit.hullDamage <= 0) {
     return hit.shieldBroken
-      ? `SHIELD BREAK ${hit.shieldDamage}`
-      : `SHIELD ABSORB ${hit.shieldDamage}`;
+      ? `SHIELD BREAK ${formatDamage(hit.shieldDamage)}`
+      : `SHIELD ABSORB ${formatDamage(hit.shieldDamage)} / LEAK ${formatDamage(hit.hullDamage)}`;
   }
 
   if (hit.shieldDamage > 0 && hit.hullDamage > 0) {
-    return `SHIELD BREAK / ${weapon.readout} ${hit.hullDamage}`;
+    return hit.shieldBroken
+      ? `SHIELD BREAK / ${weapon.readout} ${formatDamage(hit.hullDamage)}`
+      : `SHIELD ABSORB ${formatDamage(hit.shieldDamage)} / LEAK ${formatDamage(hit.hullDamage)}`;
   }
 
   return game.bossMode === "cooldown"
-    ? `WEAK POINT HIT ${hit.hullDamage}`
-    : `${weapon.readout} ${hit.hullDamage}`;
+    ? `WEAK POINT HIT ${formatDamage(hit.hullDamage)}`
+    : `${prefix} ${formatDamage(hit.hullDamage)}`;
+}
+
+function formatDamage(value) {
+  if (Math.abs(value - Math.round(value)) < 0.001) {
+    return String(Math.round(value));
+  }
+  if (Math.abs(value) > 0 && Math.abs(value) < 1) {
+    return value.toFixed(2);
+  }
+  return value.toFixed(1);
+}
+
+function formatTimeSeconds(durationMs) {
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function defeatBoss(now = performance.now()) {
+  if (game.bossDefeated) {
+    return;
+  }
+
+  game.bossDefeated = true;
+  game.bossDefeatedAt = now;
+  game.bossMode = "defeated";
+  game.mode = "defeated";
+  game.hack = null;
+  game.bossBreakUntil = 0;
+  game.bossShieldHp = 0;
+  game.speedPulse = 1;
+  shots.length = 0;
+  shieldImpacts.length = 0;
+  renderHackGrid();
+  restartOverlay.classList.remove("hidden");
+  damageReadout.textContent = "BOSS DESTROYED";
+  setToast("MOTHERSHIP DOWN", 1800);
+}
+
+function resetGame(now = performance.now()) {
+  game.mode = "flight";
+  game.lane = 1;
+  game.laneTarget = 1;
+  game.hp = 100;
+  game.ammo = 100;
+  game.bossHp = BOSS_MAX_HP;
+  game.bossShieldHp = BOSS_MAX_SHIELD;
+  game.hack = null;
+  game.boostMultiplierPreview = 1;
+  game.speedPulse = 0;
+  game.lastShotAt = 0;
+  game.selectedWeapon = "machine";
+  game.bossMode = "normal";
+  game.bossModeStartedAt = now;
+  game.bossBeamHitAt = 0;
+  game.bossShieldBrokenAt = 0;
+  game.bossBreakUntil = 0;
+  game.bossDefeated = false;
+  game.bossDefeatedAt = 0;
+  game.bossPose = { x: 0.5, y: 0.34 };
+  game.lastTime = now;
+
+  shots.length = 0;
+  blasts.length = 0;
+  shieldImpacts.length = 0;
+  resetHazards();
+  renderHackGrid();
+  updateWeaponUi();
+  restartOverlay.classList.add("hidden");
+  damageReadout.textContent = "DAMAGE READY";
+  setToast("RESTART", 800);
+}
+
+function resetHazards() {
+  hazards.forEach((hazard, index) => {
+    hazard.lane = index % 3;
+    hazard.z = 0.12 + Math.random() * 0.9;
+    hazard.phase = Math.random() * Math.PI * 2;
+  });
 }
 
 function updateBoss(now, delta) {
+  if (game.bossDefeated) {
+    return;
+  }
+
+  updateBossShieldRestore(now);
+
   const elapsed = now - game.bossModeStartedAt;
   if (game.bossMode === "normal" && elapsed > bossTimings.normal) {
     setBossMode("charging", now);
@@ -308,6 +404,21 @@ function updateBoss(now, delta) {
   const blend = 1 - Math.pow(1 - rate, delta / 16.67);
   game.bossPose.x += (target.x - game.bossPose.x) * blend;
   game.bossPose.y += (target.y - game.bossPose.y) * blend;
+}
+
+function updateBossShieldRestore(now) {
+  if (
+    game.bossShieldHp > 0 ||
+    game.bossShieldBrokenAt === 0 ||
+    now - game.bossShieldBrokenAt < BOSS_SHIELD_RESTORE_DELAY_MS
+  ) {
+    return;
+  }
+
+  game.bossShieldHp = Math.min(BOSS_MAX_SHIELD, BOSS_SHIELD_RESTORE_AMOUNT);
+  game.bossShieldBrokenAt = 0;
+  damageReadout.textContent = "SHIELD RESTORED";
+  setToast("BOSS SHIELD RESTORED", 1000);
 }
 
 function getBossTargetPose(now) {
@@ -414,7 +525,8 @@ function moveHack(direction) {
 
   renderHackGrid();
   if (game.hack.status !== "running") {
-    window.setTimeout(() => resolveHack(game.hack.status), 180);
+    const resolvedStatus = game.hack.status;
+    window.setTimeout(() => resolveHack(resolvedStatus), 180);
   }
 }
 
@@ -496,6 +608,7 @@ function update(now) {
   const speed = game.mode === "hack" ? 0.35 : 1;
   game.travel += delta * 0.0018 * speed;
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
+  updateBossBreak(now);
   updateBoss(now, delta);
 
   if (game.mode === "flight") {
@@ -520,11 +633,21 @@ function update(now) {
   requestAnimationFrame(update);
 }
 
+function updateBossBreak(now) {
+  if (game.bossBreakUntil > 0 && game.bossBreakUntil <= now) {
+    game.bossBreakUntil = 0;
+    if (!game.bossDefeated && damageReadout.textContent.startsWith("BREAK")) {
+      damageReadout.textContent = "DAMAGE READY";
+    }
+  }
+}
+
 function updateHud() {
   hpBar.style.width = `${game.hp}%`;
   ammoBar.style.width = `${game.ammo}%`;
   bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
   bossShieldBar.style.width = `${(game.bossShieldHp / BOSS_MAX_SHIELD) * 100}%`;
+  bossShieldBar.parentElement.classList.toggle("break", isBossBreakActive());
 }
 
 function draw(now) {
@@ -654,6 +777,10 @@ function drawFlightPath(width, height, now) {
   ctx.arc(center, height * 0.75, width * 0.31, Math.PI * 1.05, Math.PI * 1.95);
   ctx.stroke();
 
+  if (game.bossDefeated) {
+    return;
+  }
+
   for (const hazard of hazards) {
     hazard.z += game.mode === "hack" ? 0.00025 : 0.0044;
     if (hazard.z > 1.24) {
@@ -678,13 +805,16 @@ function drawFlightPath(width, height, now) {
 
 function drawBoss(width, height, now) {
   const pose = getBossPose(width, height, now);
+  const defeatedProgress = game.bossDefeated
+    ? Math.min(1, (now - game.bossDefeatedAt) / 2600)
+    : 0;
   const chargeProgress =
     game.bossMode === "charging"
       ? Math.min(1, (now - game.bossModeStartedAt) / bossTimings.charging)
       : 0;
   const cooldown = game.bossMode === "cooldown";
   const attack = game.bossMode === "charging" || game.bossMode === "beam";
-  const alpha = cooldown ? 0.48 : 0.92;
+  const alpha = game.bossDefeated ? Math.max(0, 0.92 * (1 - defeatedProgress)) : cooldown ? 0.48 : 0.92;
   const ringSpeed = cooldown ? 0.00024 : attack ? 0.0024 + chargeProgress * 0.0027 : 0.00076;
   const ringRotation = now * ringSpeed;
   const bossSize = Math.min(width * 0.3, height * 0.48);
@@ -694,7 +824,9 @@ function drawBoss(width, height, now) {
 
   ctx.save();
   ctx.translate(drawX, drawY);
-  drawBossRings(bossSize, ringRotation, chargeProgress, cooldown);
+  if (!game.bossDefeated) {
+    drawBossRings(bossSize, ringRotation, chargeProgress, cooldown);
+  }
 
   ctx.globalAlpha = alpha;
   ctx.shadowColor = cooldown ? "rgba(80, 20, 30, 0.24)" : "rgba(255, 44, 52, 0.45)";
@@ -706,9 +838,13 @@ function drawBoss(width, height, now) {
   }
 
   ctx.globalAlpha = 1;
-  drawBossCore(bossSize, now, chargeProgress, cooldown);
-  drawBossShield(bossSize, now, chargeProgress, cooldown);
-  if (game.bossMode === "charging") {
+  if (game.bossDefeated) {
+    drawBossExplosion(bossSize, now, defeatedProgress);
+  } else {
+    drawBossCore(bossSize, now, chargeProgress, cooldown);
+    drawBossShield(bossSize, now, chargeProgress, cooldown);
+  }
+  if (!game.bossDefeated && game.bossMode === "charging") {
     drawCoreParticles(bossSize, now, chargeProgress);
     drawChargeCountdown(bossSize, chargeProgress);
   }
@@ -788,21 +924,29 @@ function drawBossCore(size, now, chargeProgress, cooldown) {
 function drawBossShield(size, now, chargeProgress, cooldown) {
   const shieldRatio = game.bossShieldHp / BOSS_MAX_SHIELD;
   const hasRecentImpact = shieldImpacts.some((impact) => now - impact.born < 620);
+  const breakActive = isBossBreakActive(now);
   if (shieldRatio <= 0 && !hasRecentImpact) {
     return;
   }
 
   const baseAlpha = shieldRatio > 0 ? 0.18 + shieldRatio * 0.28 : 0.1;
-  const pulse = 0.85 + Math.sin(now * 0.006) * 0.12 + chargeProgress * 0.12;
+  const pulse =
+    0.85 +
+    Math.sin(now * (breakActive ? 0.018 : 0.006)) * (breakActive ? 0.2 : 0.12) +
+    chargeProgress * 0.12;
 
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-  ctx.strokeStyle = cooldown
-    ? `rgba(121, 83, 177, ${baseAlpha * 0.7})`
-    : `rgba(190, 101, 255, ${baseAlpha})`;
-  ctx.fillStyle = `rgba(123, 62, 255, ${baseAlpha * 0.26})`;
-  ctx.shadowColor = "rgba(183, 85, 255, 0.74)";
-  ctx.shadowBlur = 22;
+  ctx.strokeStyle = breakActive
+    ? `rgba(151, 251, 255, ${baseAlpha * 1.25})`
+    : cooldown
+      ? `rgba(121, 83, 177, ${baseAlpha * 0.7})`
+      : `rgba(190, 101, 255, ${baseAlpha})`;
+  ctx.fillStyle = breakActive
+    ? `rgba(89, 235, 255, ${baseAlpha * 0.18})`
+    : `rgba(123, 62, 255, ${baseAlpha * 0.26})`;
+  ctx.shadowColor = breakActive ? "rgba(118, 249, 255, 0.86)" : "rgba(183, 85, 255, 0.74)";
+  ctx.shadowBlur = breakActive ? 34 : 22;
   ctx.lineWidth = Math.max(2, size * 0.011);
 
   ctx.beginPath();
@@ -810,10 +954,12 @@ function drawBossShield(size, now, chargeProgress, cooldown) {
   ctx.fill();
   ctx.stroke();
 
-  ctx.strokeStyle = `rgba(124, 245, 255, ${baseAlpha * 0.86})`;
+  ctx.strokeStyle = breakActive
+    ? `rgba(255, 255, 255, ${baseAlpha})`
+    : `rgba(124, 245, 255, ${baseAlpha * 0.86})`;
   ctx.lineWidth = Math.max(1.4, size * 0.004);
   ctx.setLineDash([size * 0.032, size * 0.018]);
-  ctx.lineDashOffset = -now * 0.04;
+  ctx.lineDashOffset = -now * (breakActive ? 0.085 : 0.04);
   ctx.beginPath();
   ctx.ellipse(0, 0, size * 0.59 * pulse, size * 0.46 * pulse, 0, 0, Math.PI * 2);
   ctx.stroke();
@@ -885,6 +1031,46 @@ function drawChargeCountdown(size, chargeProgress) {
   ctx.shadowColor = "rgba(255, 38, 48, 0.95)";
   ctx.shadowBlur = 16;
   ctx.fillText(`${remaining}s`, 0, size * 0.38);
+  ctx.restore();
+}
+
+function drawBossExplosion(size, now, progress) {
+  const corePulse = 1 + Math.sin(now * 0.045) * 0.14;
+  const smokeAlpha = Math.max(0, 0.46 - progress * 0.38);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "rgba(255, 72, 56, 0.95)";
+  ctx.shadowBlur = 38;
+
+  for (let i = 0; i < 18; i += 1) {
+    const angle = i * 2.399 + Math.sin(now * 0.001 + i) * 0.18;
+    const distance = size * (0.05 + progress * (0.12 + (i % 5) * 0.035));
+    const radius = size * (0.018 + (i % 4) * 0.006) * (1 - progress * 0.28);
+    const x = Math.cos(angle) * distance;
+    const y = Math.sin(angle) * distance * 0.76;
+    const alpha = Math.max(0, 0.82 - progress * 0.72);
+
+    ctx.fillStyle = `rgba(255, ${100 + (i % 4) * 28}, 58, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size * (0.28 + progress * 0.26));
+  gradient.addColorStop(0, `rgba(255, 255, 245, ${0.92 * (1 - progress)})`);
+  gradient.addColorStop(0.22, `rgba(255, 78, 48, ${0.72 * (1 - progress * 0.4)})`);
+  gradient.addColorStop(1, "rgba(255, 38, 18, 0)");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, size * (0.32 + progress * 0.35) * corePulse, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = `rgba(44, 24, 38, ${smokeAlpha})`;
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.08, size * (0.35 + progress * 0.26), size * (0.22 + progress * 0.18), 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -1388,6 +1574,12 @@ hackButton.addEventListener("pointerdown", (event) => {
 });
 
 document.addEventListener("pointerdown", (event) => {
+  if (game.bossDefeated) {
+    event.preventDefault();
+    resetGame();
+    return;
+  }
+
   if (game.mode !== "hack") {
     return;
   }
@@ -1395,6 +1587,11 @@ document.addEventListener("pointerdown", (event) => {
     return;
   }
   cancelHack();
+});
+
+restartOverlay.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  resetGame();
 });
 
 window.addEventListener("resize", resizeCanvas);

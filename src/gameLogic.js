@@ -148,41 +148,28 @@ export function updateHackTimer(state, now) {
   };
 }
 
-export function resolveHackDamage({
-  baseDamage = 2,
-  boostsCollected = 0,
-  random = () => 0.5,
-} = {}) {
-  if (boostsCollected <= 0) {
-    return baseDamage * 10;
-  }
-
-  let multiplier = 1;
-  for (let i = 0; i < boostsCollected; i += 1) {
-    multiplier *= randomBoostMultiplier(random);
-  }
-
-  return baseDamage * multiplier;
-}
-
-export function createLaserDamage(random = Math.random) {
-  return 1 + Math.floor(clamp(random(), 0, 0.999999) * 3);
+export function resolveHackBreakDuration({ boostsCollected = 0 } = {}) {
+  return 4000 + Math.max(0, boostsCollected) * 1000;
 }
 
 export function applyShieldedBossDamage({
   bossHp = 180,
   bossShieldHp = 0,
   baseDamage = 0,
-  isCooldown = false,
-  cooldownMultiplier = 3,
+  damageProfile = "normal",
 } = {}) {
   const incomingDamage = Math.max(0, baseDamage);
   const shieldBefore = Math.max(0, bossShieldHp);
-  const shieldDamage = Math.min(shieldBefore, incomingDamage);
+  const profile =
+    damageProfile === "break" || damageProfile === "hack"
+      ? { shield: 0.7, hull: 0.1, cancel: 0.2 }
+      : { shield: 0.08, hull: 0.02, cancel: 0.9 };
+  const shieldActive = shieldBefore > 0;
+  const rawShieldDamage = shieldActive ? incomingDamage * profile.shield : 0;
+  const shieldDamage = Math.min(shieldBefore, rawShieldDamage);
   const nextBossShieldHp = Math.max(0, shieldBefore - shieldDamage);
-  const overflowDamage = Math.max(0, incomingDamage - shieldDamage);
-  const multiplier = isCooldown && nextBossShieldHp <= 0 ? cooldownMultiplier : 1;
-  const hullDamage = overflowDamage * multiplier;
+  const hullDamage = shieldActive ? incomingDamage * profile.hull : incomingDamage;
+  const canceledDamage = shieldActive ? incomingDamage * profile.cancel : 0;
 
   return {
     bossHp: Math.max(0, bossHp - hullDamage),
@@ -191,6 +178,8 @@ export function applyShieldedBossDamage({
     hullDamage,
     shieldDamage,
     shieldBefore,
+    canceledDamage,
+    shieldActive,
     shieldBroken: shieldBefore > 0 && nextBossShieldHp <= 0,
   };
 }
