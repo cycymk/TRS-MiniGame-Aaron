@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   BOARD_SIZE,
   applyShieldedBossDamage,
+  applyPlayerDamage,
   createInitialHackState,
   createRandomHackBoard,
   mapFlightInput,
@@ -95,6 +96,23 @@ test("hack success opens a break window that grows by one second per boost", () 
   assert.equal(resolveHackBreakDuration({ boostsCollected: 0 }), 4000);
   assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 5000);
   assert.equal(resolveHackBreakDuration({ boostsCollected: 3 }), 7000);
+});
+
+test("player damage spends one ship only when hp reaches zero", () => {
+  const scratched = applyPlayerDamage({ hp: 100, lives: 3, damage: 12 });
+  assert.equal(scratched.hp, 88);
+  assert.equal(scratched.lives, 3);
+  assert.equal(scratched.outcome, "alive");
+
+  const lostShip = applyPlayerDamage({ hp: 10, lives: 3, damage: 18 });
+  assert.equal(lostShip.hp, 0);
+  assert.equal(lostShip.lives, 2);
+  assert.equal(lostShip.outcome, "continue");
+
+  const gameOver = applyPlayerDamage({ hp: 8, lives: 1, damage: 12 });
+  assert.equal(gameOver.hp, 0);
+  assert.equal(gameOver.lives, 0);
+  assert.equal(gameOver.outcome, "gameover");
 });
 
 test("boss shield splits normal damage into cancel, shield, and hull portions", () => {

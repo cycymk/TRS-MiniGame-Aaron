@@ -152,6 +152,24 @@ export function resolveHackBreakDuration({ boostsCollected = 0 } = {}) {
   return 4000 + Math.max(0, boostsCollected) * 1000;
 }
 
+export function applyPlayerDamage({ hp = 100, lives = 3, damage = 0 } = {}) {
+  const nextHp = Math.max(0, hp - Math.max(0, damage));
+  if (nextHp > 0) {
+    return {
+      hp: nextHp,
+      lives,
+      outcome: "alive",
+    };
+  }
+
+  const nextLives = Math.max(0, lives - 1);
+  return {
+    hp: 0,
+    lives: nextLives,
+    outcome: nextLives > 0 ? "continue" : "gameover",
+  };
+}
+
 export function applyShieldedBossDamage({
   bossHp = 180,
   bossShieldHp = 0,

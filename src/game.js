@@ -1,6 +1,7 @@
 import {
   HACK_DURATION_MS,
   NODE_LABELS,
+  applyPlayerDamage,
   applyShieldedBossDamage,
   createInitialHackState,
   createRandomHackBoard,
@@ -23,6 +24,7 @@ const ammoBar = document.querySelector("#ammoBar");
 const bossBar = document.querySelector("#bossBar");
 const bossShieldBar = document.querySelector("#bossShieldBar");
 const damageReadout = document.querySelector("#damageReadout");
+const startOverlay = document.querySelector("#startOverlay");
 const timerPanel = document.querySelector("#timerPanel");
 const timerValue = document.querySelector("#timerValue");
 const hackPanel = document.querySelector("#hackPanel");
@@ -36,6 +38,13 @@ const fireButton = document.querySelector("#fireButton");
 const hackButton = document.querySelector("#hackButton");
 const weaponButtons = Array.from(document.querySelectorAll("[data-weapon]"));
 const restartOverlay = document.querySelector("#restartOverlay");
+const promptTitle = restartOverlay.querySelector("strong");
+const promptSubtitle = restartOverlay.querySelector("span");
+const livesIcons = document.querySelector("#livesIcons");
+const livesText = document.querySelector("#livesText");
+const pauseButton = document.querySelector("#pauseButton");
+const pauseOverlay = document.querySelector("#pauseOverlay");
+const resumeButton = document.querySelector("#resumeButton");
 const toast = document.querySelector("#toast");
 
 const lanes = [-0.38, 0, 0.38];
@@ -58,6 +67,12 @@ const BOSS_MAX_HP = 180;
 const BOSS_MAX_SHIELD = 90;
 const BOSS_SHIELD_RESTORE_DELAY_MS = 6000;
 const BOSS_SHIELD_RESTORE_AMOUNT = BOSS_MAX_SHIELD;
+const PLAYER_MAX_HP = 100;
+const PLAYER_MAX_LIVES = 3;
+const HACK_FAIL_DAMAGE = 12;
+const BOSS_BEAM_DAMAGE = 18;
+const SHIP_INTRO_DURATION_MS = 1350;
+const SHIP_DEATH_PROMPT_DELAY_MS = 1250;
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -94,10 +109,11 @@ const bossTimings = {
 };
 
 const game = {
-  mode: "flight",
+  mode: "title",
   lane: 1,
   laneTarget: 1,
-  hp: 100,
+  hp: PLAYER_MAX_HP,
+  lives: PLAYER_MAX_LIVES,
   ammo: 100,
   bossHp: BOSS_MAX_HP,
   bossShieldHp: BOSS_MAX_SHIELD,
@@ -116,7 +132,13 @@ const game = {
   bossDefeated: false,
   bossDefeatedAt: 0,
   bossPose: { x: 0.5, y: 0.34 },
+  introStartedAt: 0,
+  playerDeathStartedAt: 0,
+  playerDeathOutcome: null,
+  promptAction: null,
   lastTime: performance.now(),
+  paused: false,
+  pausedAt: 0,
 };
 
 function resizeCanvas() {
@@ -128,7 +150,7 @@ function resizeCanvas() {
 }
 
 function enterHack(now = performance.now()) {
-  if (game.mode === "hack" || game.bossDefeated) {
+  if (game.mode !== "flight" || game.bossDefeated) {
     return;
   }
 
@@ -203,15 +225,45 @@ function resolveHack(status) {
     damageReadout.textContent = `SHIELD BREAK ${formatTimeSeconds(breakDuration)}`;
     setToast(`HACK SUCCESS / BREAK ${formatTimeSeconds(breakDuration)}`, 1400);
   } else {
-    game.hp = Math.max(0, game.hp - 40);
-    damageReadout.textContent = "HEAVY DAMAGE";
-    setToast("HACK FAILED / HEAVY DAMAGE", 1400);
+    applyDamageToPlayer(HACK_FAIL_DAMAGE, {
+      readout: "HACK FAILED - LIGHT DAMAGE",
+      toast: "HACK FAILED / LIGHT DAMAGE",
+    });
   }
 
-  game.mode = "flight";
+  if (game.mode === "hack") {
+    game.mode = "flight";
+  }
   game.hack = null;
   maybeResetBoss();
   renderHackGrid();
+}
+
+function applyDamageToPlayer(damage, { readout = "HULL DAMAGE", toast: toastMessage = "HULL DAMAGE" } = {}) {
+  if (!canDamagePlayer()) {
+    return { outcome: "ignored", hp: game.hp, lives: game.lives };
+  }
+
+  const result = applyPlayerDamage({
+    hp: game.hp,
+    lives: game.lives,
+    damage,
+  });
+
+  game.hp = result.hp;
+  game.lives = result.lives;
+  damageReadout.textContent = readout;
+  setToast(toastMessage, 1200);
+
+  if (result.outcome !== "alive") {
+    beginPlayerDestroyed(result.outcome);
+  }
+
+  return result;
+}
+
+function canDamagePlayer() {
+  return game.mode === "flight" || game.mode === "hack";
 }
 
 function maybeResetBoss() {
@@ -309,7 +361,7 @@ function formatTimeSeconds(durationMs) {
 }
 
 function defeatBoss(now = performance.now()) {
-  if (game.bossDefeated) {
+  if (game.bossDefeated || !isGameplayActive()) {
     return;
   }
 
@@ -319,21 +371,23 @@ function defeatBoss(now = performance.now()) {
   game.mode = "defeated";
   game.hack = null;
   game.bossBreakUntil = 0;
+  game.promptAction = "bossRestart";
   game.bossShieldHp = 0;
   game.speedPulse = 1;
   shots.length = 0;
   shieldImpacts.length = 0;
   renderHackGrid();
-  restartOverlay.classList.remove("hidden");
+  showPrompt("再玩一次?", "CLICK / TAP ANYWHERE", "bossRestart");
   damageReadout.textContent = "BOSS DESTROYED";
   setToast("MOTHERSHIP DOWN", 1800);
 }
 
-function resetGame(now = performance.now()) {
-  game.mode = "flight";
+function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
+  game.mode = startMode === "title" ? "title" : "intro";
   game.lane = 1;
   game.laneTarget = 1;
-  game.hp = 100;
+  game.hp = PLAYER_MAX_HP;
+  game.lives = PLAYER_MAX_LIVES;
   game.ammo = 100;
   game.bossHp = BOSS_MAX_HP;
   game.bossShieldHp = BOSS_MAX_SHIELD;
@@ -350,7 +404,13 @@ function resetGame(now = performance.now()) {
   game.bossDefeated = false;
   game.bossDefeatedAt = 0;
   game.bossPose = { x: 0.5, y: 0.34 };
+  game.introStartedAt = startMode === "title" ? 0 : now;
+  game.playerDeathStartedAt = 0;
+  game.playerDeathOutcome = null;
+  game.promptAction = null;
   game.lastTime = now;
+  game.paused = false;
+  game.pausedAt = 0;
 
   shots.length = 0;
   blasts.length = 0;
@@ -358,9 +418,80 @@ function resetGame(now = performance.now()) {
   resetHazards();
   renderHackGrid();
   updateWeaponUi();
-  restartOverlay.classList.add("hidden");
+  syncPauseUi();
+  hidePrompt();
+  startOverlay.classList.toggle("hidden", startMode !== "title");
   damageReadout.textContent = "DAMAGE READY";
-  setToast("RESTART", 800);
+  if (startMode === "title") {
+    toast.classList.add("hidden");
+  } else {
+    setToast("LAUNCH", 800);
+  }
+}
+
+function startIntro(now = performance.now(), { resetWorld = false } = {}) {
+  if (resetWorld) {
+    resetGame(now, { startMode: "intro" });
+    return;
+  }
+
+  game.mode = "intro";
+  game.introStartedAt = now;
+  game.playerDeathStartedAt = 0;
+  game.playerDeathOutcome = null;
+  game.promptAction = null;
+  game.hp = PLAYER_MAX_HP;
+  game.lane = 1;
+  game.laneTarget = 1;
+  game.hack = null;
+  game.paused = false;
+  game.lastTime = now;
+  hidePrompt();
+  startOverlay.classList.add("hidden");
+  syncPauseUi();
+  renderHackGrid();
+  setToast("LAUNCH", 800);
+}
+
+function beginPlayerDestroyed(outcome, now = performance.now()) {
+  game.mode = "playerDestroyed";
+  game.hack = null;
+  game.playerDeathStartedAt = now;
+  game.playerDeathOutcome = outcome;
+  game.bossBreakUntil = 0;
+  game.speedPulse = 1;
+  shots.length = 0;
+  renderHackGrid();
+  damageReadout.textContent = outcome === "gameover" ? "SHIP LOST" : "SHIP DOWN";
+  setToast(outcome === "gameover" ? "FINAL SHIP LOST" : "SHIP LOST", 1100);
+}
+
+function continuePlayer(now = performance.now()) {
+  game.hp = PLAYER_MAX_HP;
+  game.ammo = Math.min(100, Math.max(game.ammo, 70));
+  game.lane = 1;
+  game.laneTarget = 1;
+  game.playerDeathStartedAt = 0;
+  game.playerDeathOutcome = null;
+  game.promptAction = null;
+  game.mode = "intro";
+  game.introStartedAt = now;
+  game.lastTime = now;
+  hidePrompt();
+  damageReadout.textContent = "CONTINUE";
+  setToast("SHIP RE-ENTRY", 900);
+}
+
+function showPrompt(title, subtitle, action) {
+  promptTitle.textContent = title;
+  promptSubtitle.textContent = subtitle;
+  game.promptAction = action;
+  restartOverlay.classList.remove("hidden");
+}
+
+function hidePrompt() {
+  game.promptAction = null;
+  restartOverlay.classList.add("hidden");
 }
 
 function resetHazards() {
@@ -371,8 +502,64 @@ function resetHazards() {
   });
 }
 
+function setPaused(paused, now = performance.now()) {
+  if ((game.bossDefeated || !isGameplayActive()) && paused) {
+    return;
+  }
+  if (game.paused === paused) {
+    return;
+  }
+
+  if (paused) {
+    game.paused = true;
+    game.pausedAt = now;
+    syncPauseUi();
+    resumeButton.focus({ preventScroll: true });
+    return;
+  }
+
+  const pausedDuration = Math.max(0, now - game.pausedAt);
+  game.paused = false;
+  game.pausedAt = 0;
+  game.lastTime = now;
+  game.bossModeStartedAt += pausedDuration;
+  game.lastShotAt += pausedDuration;
+  game.messageUntil += pausedDuration;
+
+  if (game.hack) {
+    game.hack = {
+      ...game.hack,
+      expiresAt: game.hack.expiresAt + pausedDuration,
+    };
+  }
+  if (game.bossShieldBrokenAt > 0) {
+    game.bossShieldBrokenAt += pausedDuration;
+  }
+  if (game.bossBreakUntil > 0) {
+    game.bossBreakUntil += pausedDuration;
+  }
+
+  shots.forEach((shot) => {
+    shot.born += pausedDuration;
+  });
+  blasts.forEach((blast) => {
+    blast.born += pausedDuration;
+  });
+  shieldImpacts.forEach((impact) => {
+    impact.born += pausedDuration;
+  });
+
+  syncPauseUi();
+  pauseButton.focus({ preventScroll: true });
+}
+
+function syncPauseUi() {
+  pauseOverlay.classList.toggle("hidden", !game.paused);
+  pauseButton.setAttribute("aria-pressed", String(game.paused));
+}
+
 function updateBoss(now, delta) {
-  if (game.bossDefeated) {
+  if (game.bossDefeated || !isGameplayActive()) {
     return;
   }
 
@@ -390,7 +577,10 @@ function updateBoss(now, delta) {
   }
 
   if (game.bossMode === "beam" && game.bossBeamHitAt === 0) {
-    game.hp = Math.max(0, game.hp - 18);
+    applyDamageToPlayer(BOSS_BEAM_DAMAGE, {
+      readout: "BEAM DAMAGE",
+      toast: "BOSS BEAM HIT",
+    });
     game.bossBeamHitAt = now;
   }
 
@@ -404,6 +594,10 @@ function updateBoss(now, delta) {
   const blend = 1 - Math.pow(1 - rate, delta / 16.67);
   game.bossPose.x += (target.x - game.bossPose.x) * blend;
   game.bossPose.y += (target.y - game.bossPose.y) * blend;
+}
+
+function isGameplayActive() {
+  return game.mode === "flight" || game.mode === "hack";
 }
 
 function updateBossShieldRestore(now) {
@@ -603,11 +797,19 @@ function setToast(message, duration) {
 }
 
 function update(now) {
+  if (game.paused) {
+    game.lastTime = now;
+    requestAnimationFrame(update);
+    return;
+  }
+
   const delta = Math.min(48, now - game.lastTime);
   game.lastTime = now;
   const speed = game.mode === "hack" ? 0.35 : 1;
   game.travel += delta * 0.0018 * speed;
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
+  updateIntro(now);
+  updatePlayerDestroyed(now);
   updateBossBreak(now);
   updateBoss(now, delta);
 
@@ -633,6 +835,38 @@ function update(now) {
   requestAnimationFrame(update);
 }
 
+function updateIntro(now) {
+  if (game.mode !== "intro") {
+    return;
+  }
+
+  const progress = Math.min(1, (now - game.introStartedAt) / SHIP_INTRO_DURATION_MS);
+  game.lane += (game.laneTarget - game.lane) * 0.12;
+  if (progress >= 1) {
+    game.mode = "flight";
+    game.bossModeStartedAt = now;
+    damageReadout.textContent = "DAMAGE READY";
+  }
+}
+
+function updatePlayerDestroyed(now) {
+  if (game.mode !== "playerDestroyed") {
+    return;
+  }
+
+  if (now - game.playerDeathStartedAt < SHIP_DEATH_PROMPT_DELAY_MS) {
+    return;
+  }
+
+  if (game.playerDeathOutcome === "continue") {
+    game.mode = "continue";
+    showPrompt("Continue", "TAP TO LAUNCH NEXT SHIP", "continue");
+  } else {
+    game.mode = "gameover";
+    showPrompt("Game Over", "TAP TO RESTART", "gameover");
+  }
+}
+
 function updateBossBreak(now) {
   if (game.bossBreakUntil > 0 && game.bossBreakUntil <= now) {
     game.bossBreakUntil = 0;
@@ -643,11 +877,19 @@ function updateBossBreak(now) {
 }
 
 function updateHud() {
-  hpBar.style.width = `${game.hp}%`;
+  hpBar.style.width = `${Math.max(0, Math.min(100, game.hp))}%`;
   ammoBar.style.width = `${game.ammo}%`;
   bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
   bossShieldBar.style.width = `${(game.bossShieldHp / BOSS_MAX_SHIELD) * 100}%`;
   bossShieldBar.parentElement.classList.toggle("break", isBossBreakActive());
+  livesText.textContent = `x ${game.lives}`;
+  livesIcons.textContent = "";
+  for (let index = 0; index < PLAYER_MAX_LIVES; index += 1) {
+    const icon = document.createElement("span");
+    icon.className = "life-ship";
+    icon.classList.toggle("spent", index >= game.lives);
+    livesIcons.append(icon);
+  }
 }
 
 function draw(now) {
@@ -659,7 +901,9 @@ function draw(now) {
   drawSpace(width, height, now);
   drawWarpTunnel(width, height, now);
   drawFlightPath(width, height, now);
-  drawBoss(width, height, now);
+  if (game.mode !== "title") {
+    drawBoss(width, height, now);
+  }
   drawShip(width, height, now);
   drawShots(width, height, now);
   drawActiveBossBeam(width, height, now);
@@ -777,7 +1021,7 @@ function drawFlightPath(width, height, now) {
   ctx.arc(center, height * 0.75, width * 0.31, Math.PI * 1.05, Math.PI * 1.95);
   ctx.stroke();
 
-  if (game.bossDefeated) {
+  if (game.bossDefeated || !isGameplayActive()) {
     return;
   }
 
@@ -1159,30 +1403,43 @@ function drawFallbackBoss(size) {
 }
 
 function drawShip(width, height, now) {
+  if (game.mode === "title" || game.mode === "gameover") {
+    return;
+  }
+
   const pose = getShipPose(width, height);
   const shipX = pose.x;
   const shipY = pose.y;
   const drift = pose.drift;
   const shipWidth = Math.min(width * 0.22, 250);
   const shipHeight = shipWidth * 0.68;
+  const deathProgress =
+    game.mode === "playerDestroyed" || game.mode === "continue"
+      ? Math.min(1, (now - game.playerDeathStartedAt) / SHIP_DEATH_PROMPT_DELAY_MS)
+      : 0;
   const flamePulse = 0.82 + Math.sin(now * 0.026) * 0.16 + Math.sin(now * 0.051) * 0.08;
   const boost = 1 + game.speedPulse * 0.45;
   const sway = Math.max(-1, Math.min(1, drift / 120));
 
   ctx.save();
   ctx.translate(shipX, shipY);
-  ctx.rotate(sway * 0.045);
+  ctx.rotate(sway * 0.045 + deathProgress * 0.32);
 
-  drawEngineFlame(-shipWidth * 0.18, shipHeight * 0.24, shipWidth, flamePulse, boost, now, -1);
-  drawEngineFlame(shipWidth * 0.18, shipHeight * 0.24, shipWidth, flamePulse, boost, now, 1);
+  if (deathProgress < 0.38) {
+    drawEngineFlame(-shipWidth * 0.18, shipHeight * 0.24, shipWidth, flamePulse, boost, now, -1);
+    drawEngineFlame(shipWidth * 0.18, shipHeight * 0.24, shipWidth, flamePulse, boost, now, 1);
+  }
 
   if (shipImage.complete && shipImage.naturalWidth > 0) {
-    ctx.globalAlpha = 0.97;
+    ctx.globalAlpha = 0.97 * (1 - deathProgress * 0.82);
     ctx.shadowColor = "rgba(61, 213, 255, 0.36)";
     ctx.shadowBlur = 18;
     ctx.drawImage(shipImage, -shipWidth / 2, -shipHeight * 0.58, shipWidth, shipHeight);
   } else {
     drawFallbackShip(now);
+  }
+  if (deathProgress > 0) {
+    drawPlayerExplosion(shipWidth, now, deathProgress);
   }
   ctx.restore();
 }
@@ -1190,11 +1447,62 @@ function drawShip(width, height, now) {
 function getShipPose(width, height, lane = game.lane, laneTarget = game.laneTarget) {
   const x = width * (0.5 + lanes[Math.round(lane)] * 0.34);
   const targetX = width * (0.5 + lanes[laneTarget] * 0.34);
+  let y = height * 0.79;
+
+  if (game.mode === "intro") {
+    const progress = easeOutCubic(
+      Math.min(1, (performance.now() - game.introStartedAt) / SHIP_INTRO_DURATION_MS),
+    );
+    y = height * (1.22 - 0.43 * progress);
+  } else if (game.mode === "playerDestroyed" || game.mode === "continue") {
+    const progress = easeInCubic(
+      Math.min(1, (performance.now() - game.playerDeathStartedAt) / SHIP_DEATH_PROMPT_DELAY_MS),
+    );
+    y = height * (0.79 + 0.42 * progress);
+  }
+
   return {
     x: x + (targetX - x) * 0.45,
-    y: height * 0.79,
+    y,
     drift: targetX - x,
   };
+}
+
+function drawPlayerExplosion(shipWidth, now, progress) {
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "rgba(255, 152, 58, 0.92)";
+  ctx.shadowBlur = 26;
+
+  for (let index = 0; index < 12; index += 1) {
+    const angle = index * 2.12 + Math.sin(now * 0.003 + index) * 0.22;
+    const distance = shipWidth * (0.05 + progress * (0.12 + (index % 4) * 0.035));
+    const radius = shipWidth * (0.018 + (index % 3) * 0.007) * (1 - progress * 0.35);
+    const alpha = Math.max(0, 0.86 - progress * 0.72);
+
+    ctx.fillStyle = `rgba(255, ${130 + index * 5}, 62, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(Math.cos(angle) * distance, Math.sin(angle) * distance * 0.68, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, shipWidth * (0.28 + progress * 0.34));
+  gradient.addColorStop(0, `rgba(255, 255, 240, ${0.86 * (1 - progress)})`);
+  gradient.addColorStop(0.2, `rgba(255, 94, 52, ${0.76 * (1 - progress * 0.35)})`);
+  gradient.addColorStop(1, "rgba(255, 44, 28, 0)");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, shipWidth * (0.24 + progress * 0.24), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function easeOutCubic(value) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
+function easeInCubic(value) {
+  return value * value * value;
 }
 
 function getShipMuzzle(width, height, shot = game) {
@@ -1515,6 +1823,9 @@ function setupHoldControl(button, action) {
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (game.paused) {
+      return;
+    }
     if (game.mode !== "flight") {
       if (game.mode === "hack") {
         cancelHack();
@@ -1545,6 +1856,9 @@ setupHoldControl(moveRightButton, "moveRight");
 fireButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
+  if (game.paused) {
+    return;
+  }
   if (game.mode === "hack") {
     cancelHack();
     return;
@@ -1556,6 +1870,9 @@ weaponButtons.forEach((button) => {
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (game.paused) {
+      return;
+    }
     if (game.mode === "hack") {
       cancelHack();
     }
@@ -1566,6 +1883,9 @@ weaponButtons.forEach((button) => {
 hackButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
+  if (game.paused) {
+    return;
+  }
   if (game.mode === "hack") {
     cancelHack();
   } else {
@@ -1573,7 +1893,39 @@ hackButton.addEventListener("pointerdown", (event) => {
   }
 });
 
+startOverlay.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (game.mode === "title") {
+    startIntro();
+  }
+});
+
+pauseButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  setPaused(!game.paused);
+});
+
+resumeButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  setPaused(false);
+});
+
+pauseOverlay.addEventListener("pointerdown", (event) => {
+  if (event.target !== pauseOverlay) {
+    return;
+  }
+  event.preventDefault();
+  setPaused(false);
+});
+
 document.addEventListener("pointerdown", (event) => {
+  if (game.paused) {
+    return;
+  }
+
   if (game.bossDefeated) {
     event.preventDefault();
     resetGame();
@@ -1591,11 +1943,35 @@ document.addEventListener("pointerdown", (event) => {
 
 restartOverlay.addEventListener("pointerdown", (event) => {
   event.preventDefault();
-  resetGame();
+  if (game.promptAction === "continue") {
+    continuePlayer();
+  } else if (game.promptAction === "gameover" || game.promptAction === "bossRestart") {
+    resetGame(performance.now(), { startMode: "intro" });
+  }
 });
 
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setPaused(!game.paused);
+    return;
+  }
+  if (game.paused) {
+    event.preventDefault();
+    return;
+  }
+
+  if (
+    game.mode === "title" ||
+    game.mode === "intro" ||
+    game.mode === "playerDestroyed" ||
+    game.mode === "continue" ||
+    game.mode === "gameover"
+  ) {
+    return;
+  }
+
   const flightAction = mapFlightInput(event);
   const hackAction = mapHackInput(event);
   if (flightAction || hackAction) {

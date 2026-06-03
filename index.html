@@ -17,6 +17,57 @@
       <div class="scene-grade" aria-hidden="true"></div>
       <canvas id="spaceCanvas" width="1280" height="720" aria-label="space combat view"></canvas>
 
+      <section id="startOverlay" class="start-overlay" aria-label="title screen">
+        <div>
+          <strong>==TRS Game==</strong>
+          <span>TAP to Start</span>
+        </div>
+      </section>
+
+      <button
+        id="pauseButton"
+        class="pause-button"
+        type="button"
+        aria-label="暫停"
+        aria-pressed="false"
+        aria-controls="pauseOverlay"
+      >
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </button>
+
+      <section
+        id="pauseOverlay"
+        class="pause-overlay hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pauseTitle"
+      >
+        <div class="pause-dialog">
+          <header>
+            <h2 id="pauseTitle">暫停</h2>
+            <button id="resumeButton" class="resume-button" type="button" aria-label="繼續遊戲">
+              返回
+            </button>
+          </header>
+          <div class="help-section">
+            <h3>遊戲說明</h3>
+            <p data-testid="game-help-summary">
+              駕駛戰機迎擊母艦，破解核心削弱護盾，趁破盾窗口集中火力擊破敵艦。
+            </p>
+          </div>
+          <div class="help-section">
+            <h3>操作說明</h3>
+            <ul>
+              <li>移動：方向鍵左右或數字鍵 4 / 6</li>
+              <li>開火：Alt 或數字鍵 0</li>
+              <li>切換武器：Delete 或小數點</li>
+              <li>駭入：Ctrl 或數字鍵 +，路徑移動用方向鍵或 8 / 2 / 4 / 6</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section class="ship-panel" aria-label="ship status">
         <div class="score-readout">086,520</div>
         <div class="shard-readout">
@@ -33,6 +84,10 @@
         <div class="meter-row compact">
           <span>AMMO</span>
           <div class="meter ammo"><i id="ammoBar"></i></div>
+        </div>
+        <div class="lives-row" aria-label="remaining ships">
+          <div id="livesIcons" class="lives-icons" aria-hidden="true"></div>
+          <strong id="livesText">x 3</strong>
         </div>
       </section>
 
