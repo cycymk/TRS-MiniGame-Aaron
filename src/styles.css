@@ -694,6 +694,71 @@ body {
   font-size: clamp(0.5rem, 0.8vw, 0.68rem);
 }
 
+.mobile-touch-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: none;
+  pointer-events: none;
+}
+
+.mobile-touch-zone {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-zone-left {
+  z-index: 1;
+  left: 0;
+  top: 54%;
+  width: 46%;
+  height: 46%;
+  clip-path: polygon(0 0, 72% 8%, 98% 100%, 0 100%);
+}
+
+.touch-zone-fire {
+  z-index: 4;
+  left: 31%;
+  top: 54%;
+  width: 32%;
+  height: 46%;
+  clip-path: polygon(22% 0, 84% 0, 100% 100%, 0 100%);
+}
+
+.touch-zone-right {
+  z-index: 2;
+  left: 42%;
+  top: 54%;
+  width: 34%;
+  height: 46%;
+  clip-path: polygon(38% 10%, 100% 0, 100% 100%, 0 100%);
+}
+
+.touch-zone-hack {
+  z-index: 3;
+  right: 0;
+  top: 46%;
+  width: 30%;
+  height: 38%;
+  clip-path: polygon(28% 0, 100% 0, 100% 100%, 0 88%, 0 32%);
+}
+
+.touch-zone-weapon {
+  z-index: 5;
+  right: 0;
+  bottom: 0;
+  width: 31%;
+  height: 27%;
+  clip-path: polygon(5% 0, 100% 0, 100% 100%, 0 100%);
+}
+
 .control-strip {
   left: 50%;
   bottom: 2.5%;
@@ -1055,6 +1120,17 @@ button {
   .hack-action-button {
     right: 3.2%;
     bottom: 15%;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .mobile-touch-layer {
+    display: block;
+    pointer-events: auto;
+  }
+
+  .mobile-touch-zone {
+    pointer-events: auto;
   }
 }
 

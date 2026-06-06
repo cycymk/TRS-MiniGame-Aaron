@@ -36,6 +36,12 @@ const moveLeftButton = document.querySelector("#moveLeftButton");
 const moveRightButton = document.querySelector("#moveRightButton");
 const fireButton = document.querySelector("#fireButton");
 const hackButton = document.querySelector("#hackButton");
+const touchMoveLeftZone = document.querySelector("#touchMoveLeftZone");
+const touchMoveRightZone = document.querySelector("#touchMoveRightZone");
+const touchFireZone = document.querySelector("#touchFireZone");
+const touchHackZone = document.querySelector("#touchHackZone");
+const touchWeaponZone = document.querySelector("#touchWeaponZone");
+const weaponDock = document.querySelector(".weapon-dock");
 const weaponButtons = Array.from(document.querySelectorAll("[data-weapon]"));
 const restartOverlay = document.querySelector("#restartOverlay");
 const promptTitle = restartOverlay.querySelector("strong");
@@ -73,6 +79,12 @@ const HACK_FAIL_DAMAGE = 12;
 const BOSS_BEAM_DAMAGE = 18;
 const SHIP_INTRO_DURATION_MS = 1350;
 const SHIP_DEATH_PROMPT_DELAY_MS = 1250;
+const SHIP_LANE_SPRING = 32;
+const SHIP_LANE_DAMPING = 7.6;
+const SHIP_LANE_REST_THRESHOLD = 0.002;
+const SHIP_BANK_MAX_ROTATION = 0.17;
+const BOSS_DEFEAT_SEQUENCE_MS = 4300;
+const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -112,6 +124,7 @@ const game = {
   mode: "title",
   lane: 1,
   laneTarget: 1,
+  laneVelocity: 0,
   hp: PLAYER_MAX_HP,
   lives: PLAYER_MAX_LIVES,
   ammo: 100,
@@ -131,6 +144,7 @@ const game = {
   bossBreakUntil: 0,
   bossDefeated: false,
   bossDefeatedAt: 0,
+  victoryShownAt: 0,
   bossPose: { x: 0.5, y: 0.34 },
   introStartedAt: 0,
   playerDeathStartedAt: 0,
@@ -194,6 +208,7 @@ function fireWeapon(now = performance.now()) {
     damage: hit.displayDamage,
     lane: game.lane,
     laneTarget: game.laneTarget,
+    laneVelocity: game.laneVelocity,
     seed: Math.random() * Math.PI * 2,
     shielded: hit.shieldDamage > 0,
   });
@@ -204,6 +219,7 @@ function fireWeapon(now = performance.now()) {
     type: game.selectedWeapon,
     lane: game.lane,
     laneTarget: game.laneTarget,
+    laneVelocity: game.laneVelocity,
     shielded: hit.shieldDamage > 0,
   });
   damageReadout.textContent = formatWeaponReadout(weapon, hit);
@@ -367,25 +383,27 @@ function defeatBoss(now = performance.now()) {
 
   game.bossDefeated = true;
   game.bossDefeatedAt = now;
+  game.victoryShownAt = 0;
   game.bossMode = "defeated";
-  game.mode = "defeated";
+  game.mode = "bossDying";
   game.hack = null;
   game.bossBreakUntil = 0;
-  game.promptAction = "bossRestart";
+  game.promptAction = null;
   game.bossShieldHp = 0;
   game.speedPulse = 1;
   shots.length = 0;
   shieldImpacts.length = 0;
   renderHackGrid();
-  showPrompt("再玩一次?", "CLICK / TAP ANYWHERE", "bossRestart");
-  damageReadout.textContent = "BOSS DESTROYED";
-  setToast("MOTHERSHIP DOWN", 1800);
+  hidePrompt();
+  damageReadout.textContent = "BOSS CRITICAL";
+  setToast("CORE COLLAPSE", 1400);
 }
 
 function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.mode = startMode === "title" ? "title" : "intro";
   game.lane = 1;
   game.laneTarget = 1;
+  game.laneVelocity = 0;
   game.hp = PLAYER_MAX_HP;
   game.lives = PLAYER_MAX_LIVES;
   game.ammo = 100;
@@ -403,6 +421,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.bossBreakUntil = 0;
   game.bossDefeated = false;
   game.bossDefeatedAt = 0;
+  game.victoryShownAt = 0;
   game.bossPose = { x: 0.5, y: 0.34 };
   game.introStartedAt = startMode === "title" ? 0 : now;
   game.playerDeathStartedAt = 0;
@@ -443,6 +462,7 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   game.hp = PLAYER_MAX_HP;
   game.lane = 1;
   game.laneTarget = 1;
+  game.laneVelocity = 0;
   game.hack = null;
   game.paused = false;
   game.lastTime = now;
@@ -459,6 +479,7 @@ function beginPlayerDestroyed(outcome, now = performance.now()) {
   game.playerDeathStartedAt = now;
   game.playerDeathOutcome = outcome;
   game.bossBreakUntil = 0;
+  game.laneVelocity = 0;
   game.speedPulse = 1;
   shots.length = 0;
   renderHackGrid();
@@ -471,6 +492,7 @@ function continuePlayer(now = performance.now()) {
   game.ammo = Math.min(100, Math.max(game.ammo, 70));
   game.lane = 1;
   game.laneTarget = 1;
+  game.laneVelocity = 0;
   game.playerDeathStartedAt = 0;
   game.playerDeathOutcome = null;
   game.promptAction = null;
@@ -492,6 +514,16 @@ function showPrompt(title, subtitle, action) {
 function hidePrompt() {
   game.promptAction = null;
   restartOverlay.classList.add("hidden");
+}
+
+function tryRestartAfterBossVictory() {
+  if (!game.bossDefeated) {
+    return false;
+  }
+  if (game.promptAction === "bossRestart") {
+    resetGame();
+  }
+  return true;
 }
 
 function resetHazards() {
@@ -752,12 +784,36 @@ function moveFlight(direction) {
     return;
   }
 
+  const previousTarget = game.laneTarget;
   if (direction === "moveLeft") {
     game.laneTarget = Math.max(0, game.laneTarget - 1);
-    game.speedPulse = 1;
   } else if (direction === "moveRight") {
     game.laneTarget = Math.min(2, game.laneTarget + 1);
+  }
+
+  if (game.laneTarget !== previousTarget) {
     game.speedPulse = 1;
+  }
+}
+
+function updateShipMovement(delta) {
+  const dt = delta / 1000;
+  const pull = (game.laneTarget - game.lane) * SHIP_LANE_SPRING;
+  const damping = game.laneVelocity * SHIP_LANE_DAMPING;
+  game.laneVelocity += (pull - damping) * dt;
+  game.lane += game.laneVelocity * dt;
+
+  if (game.lane < 0 || game.lane > 2) {
+    game.lane = Math.max(0, Math.min(2, game.lane));
+    game.laneVelocity = 0;
+  }
+
+  if (
+    Math.abs(game.laneTarget - game.lane) < SHIP_LANE_REST_THRESHOLD &&
+    Math.abs(game.laneVelocity) < SHIP_LANE_REST_THRESHOLD
+  ) {
+    game.lane = game.laneTarget;
+    game.laneVelocity = 0;
   }
 }
 
@@ -808,14 +864,15 @@ function update(now) {
   const speed = game.mode === "hack" ? 0.35 : 1;
   game.travel += delta * 0.0018 * speed;
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
-  updateIntro(now);
+  updateIntro(now, delta);
   updatePlayerDestroyed(now);
+  updateBossVictory(now);
   updateBossBreak(now);
   updateBoss(now, delta);
 
   if (game.mode === "flight") {
     game.ammo = Math.min(100, game.ammo + delta * 0.012);
-    game.lane += (game.laneTarget - game.lane) * 0.16;
+    updateShipMovement(delta);
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
     const remaining = Math.max(0, game.hack.expiresAt - now);
@@ -835,13 +892,13 @@ function update(now) {
   requestAnimationFrame(update);
 }
 
-function updateIntro(now) {
+function updateIntro(now, delta = 16) {
   if (game.mode !== "intro") {
     return;
   }
 
   const progress = Math.min(1, (now - game.introStartedAt) / SHIP_INTRO_DURATION_MS);
-  game.lane += (game.laneTarget - game.lane) * 0.12;
+  updateShipMovement(delta);
   if (progress >= 1) {
     game.mode = "flight";
     game.bossModeStartedAt = now;
@@ -863,7 +920,31 @@ function updatePlayerDestroyed(now) {
     showPrompt("Continue", "TAP TO LAUNCH NEXT SHIP", "continue");
   } else {
     game.mode = "gameover";
-    showPrompt("Game Over", "TAP TO RESTART", "gameover");
+    showPrompt("任務失敗", "FINAL SHIP LOST / TAP TO RETRY", "gameover");
+  }
+}
+
+function updateBossVictory(now) {
+  if (!game.bossDefeated) {
+    return;
+  }
+
+  const elapsed = now - game.bossDefeatedAt;
+  if (game.mode === "bossDying" && elapsed >= BOSS_DEFEAT_SEQUENCE_MS) {
+    game.mode = "victory";
+    game.victoryShownAt = now;
+    damageReadout.textContent = "YOU WIN!";
+    setToast("YOU WIN! / 挑戰過關", BOSS_VICTORY_PROMPT_DELAY_MS);
+    return;
+  }
+
+  if (
+    game.mode === "victory" &&
+    game.victoryShownAt > 0 &&
+    now - game.victoryShownAt >= BOSS_VICTORY_PROMPT_DELAY_MS
+  ) {
+    game.mode = "victoryPrompt";
+    showPrompt("再玩一次?", "YOU WIN! / 挑戰過關", "bossRestart");
   }
 }
 
@@ -1050,7 +1131,7 @@ function drawFlightPath(width, height, now) {
 function drawBoss(width, height, now) {
   const pose = getBossPose(width, height, now);
   const defeatedProgress = game.bossDefeated
-    ? Math.min(1, (now - game.bossDefeatedAt) / 2600)
+    ? Math.min(1, (now - game.bossDefeatedAt) / BOSS_DEFEAT_SEQUENCE_MS)
     : 0;
   const chargeProgress =
     game.bossMode === "charging"
@@ -1058,16 +1139,21 @@ function drawBoss(width, height, now) {
       : 0;
   const cooldown = game.bossMode === "cooldown";
   const attack = game.bossMode === "charging" || game.bossMode === "beam";
-  const alpha = game.bossDefeated ? Math.max(0, 0.92 * (1 - defeatedProgress)) : cooldown ? 0.48 : 0.92;
+  const alpha = game.bossDefeated ? Math.max(0, 0.92 * (1 - defeatedProgress * 0.92)) : cooldown ? 0.48 : 0.92;
   const ringSpeed = cooldown ? 0.00024 : attack ? 0.0024 + chargeProgress * 0.0027 : 0.00076;
   const ringRotation = now * ringSpeed;
   const bossSize = Math.min(width * 0.3, height * 0.48);
-  const shake = attack ? Math.pow(chargeProgress, 1.5) * (2 + Math.sin(now * 0.06) * 2.4) : 0;
+  const defeatShake = game.bossDefeated ? (1 - defeatedProgress) * (6 + Math.sin(now * 0.07) * 3) : 0;
+  const sink = game.bossDefeated ? easeInCubic(defeatedProgress) * height * 0.2 : 0;
+  const shake = attack ? Math.pow(chargeProgress, 1.5) * (2 + Math.sin(now * 0.06) * 2.4) : defeatShake;
   const drawX = pose.x + (attack ? Math.sin(now * (0.018 + chargeProgress * 0.04)) * shake : 0);
-  const drawY = pose.y + (attack ? Math.cos(now * (0.023 + chargeProgress * 0.05)) * shake : 0);
+  const drawY = pose.y + sink + (attack ? Math.cos(now * (0.023 + chargeProgress * 0.05)) * shake : Math.cos(now * 0.052) * shake);
 
   ctx.save();
   ctx.translate(drawX, drawY);
+  if (game.bossDefeated) {
+    ctx.rotate(Math.sin(now * 0.008) * defeatedProgress * 0.24);
+  }
   if (!game.bossDefeated) {
     drawBossRings(bossSize, ringRotation, chargeProgress, cooldown);
   }
@@ -1280,20 +1366,21 @@ function drawChargeCountdown(size, chargeProgress) {
 
 function drawBossExplosion(size, now, progress) {
   const corePulse = 1 + Math.sin(now * 0.045) * 0.14;
-  const smokeAlpha = Math.max(0, 0.46 - progress * 0.38);
+  const smokeAlpha = Math.max(0, 0.58 - progress * 0.34);
 
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   ctx.shadowColor = "rgba(255, 72, 56, 0.95)";
-  ctx.shadowBlur = 38;
+  ctx.shadowBlur = 46;
 
-  for (let i = 0; i < 18; i += 1) {
+  for (let i = 0; i < 32; i += 1) {
     const angle = i * 2.399 + Math.sin(now * 0.001 + i) * 0.18;
-    const distance = size * (0.05 + progress * (0.12 + (i % 5) * 0.035));
-    const radius = size * (0.018 + (i % 4) * 0.006) * (1 - progress * 0.28);
+    const burst = i % 2 === 0 ? progress : Math.min(1, progress * 1.25);
+    const distance = size * (0.04 + burst * (0.18 + (i % 6) * 0.035));
+    const radius = size * (0.014 + (i % 5) * 0.006) * (1 - progress * 0.22);
     const x = Math.cos(angle) * distance;
     const y = Math.sin(angle) * distance * 0.76;
-    const alpha = Math.max(0, 0.82 - progress * 0.72);
+    const alpha = Math.max(0, 0.9 - progress * 0.68);
 
     ctx.fillStyle = `rgba(255, ${100 + (i % 4) * 28}, 58, ${alpha})`;
     ctx.beginPath();
@@ -1313,7 +1400,7 @@ function drawBossExplosion(size, now, progress) {
   ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = `rgba(44, 24, 38, ${smokeAlpha})`;
   ctx.beginPath();
-  ctx.ellipse(0, size * 0.08, size * (0.35 + progress * 0.26), size * (0.22 + progress * 0.18), 0, 0, Math.PI * 2);
+  ctx.ellipse(0, size * (0.08 + progress * 0.18), size * (0.38 + progress * 0.34), size * (0.24 + progress * 0.22), 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -1410,7 +1497,6 @@ function drawShip(width, height, now) {
   const pose = getShipPose(width, height);
   const shipX = pose.x;
   const shipY = pose.y;
-  const drift = pose.drift;
   const shipWidth = Math.min(width * 0.22, 250);
   const shipHeight = shipWidth * 0.68;
   const deathProgress =
@@ -1419,11 +1505,10 @@ function drawShip(width, height, now) {
       : 0;
   const flamePulse = 0.82 + Math.sin(now * 0.026) * 0.16 + Math.sin(now * 0.051) * 0.08;
   const boost = 1 + game.speedPulse * 0.45;
-  const sway = Math.max(-1, Math.min(1, drift / 120));
 
   ctx.save();
   ctx.translate(shipX, shipY);
-  ctx.rotate(sway * 0.045 + deathProgress * 0.32);
+  ctx.rotate(pose.rotation + deathProgress * 0.32);
 
   if (deathProgress < 0.38) {
     drawEngineFlame(-shipWidth * 0.18, shipHeight * 0.24, shipWidth, flamePulse, boost, now, -1);
@@ -1444,9 +1529,15 @@ function drawShip(width, height, now) {
   ctx.restore();
 }
 
-function getShipPose(width, height, lane = game.lane, laneTarget = game.laneTarget) {
-  const x = width * (0.5 + lanes[Math.round(lane)] * 0.34);
-  const targetX = width * (0.5 + lanes[laneTarget] * 0.34);
+function getShipPose(
+  width,
+  height,
+  lane = game.lane,
+  laneTarget = game.laneTarget,
+  laneVelocity = game.laneVelocity,
+) {
+  const x = width * (0.5 + getLaneOffset(lane) * 0.34);
+  const targetX = width * (0.5 + getLaneOffset(laneTarget) * 0.34);
   let y = height * 0.79;
 
   if (game.mode === "intro") {
@@ -1461,10 +1552,32 @@ function getShipPose(width, height, lane = game.lane, laneTarget = game.laneTarg
     y = height * (0.79 + 0.42 * progress);
   }
 
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const aimRotation = Math.atan2(vanishPoint.x - x, y - vanishPoint.y);
+  const bankInput = Math.max(-1, Math.min(1, laneVelocity * 0.86 + (laneTarget - lane) * 0.38));
+  const bankRotation = bankInput * SHIP_BANK_MAX_ROTATION;
+
   return {
-    x: x + (targetX - x) * 0.45,
+    x,
     y,
     drift: targetX - x,
+    rotation: aimRotation + bankRotation,
+  };
+}
+
+function getLaneOffset(lanePosition) {
+  const clampedLane = Math.max(0, Math.min(2, lanePosition));
+  const lowerLane = Math.floor(clampedLane);
+  const upperLane = Math.ceil(clampedLane);
+  const blend = clampedLane - lowerLane;
+
+  return lanes[lowerLane] + (lanes[upperLane] - lanes[lowerLane]) * blend;
+}
+
+function getFlightVanishPoint(width, height) {
+  return {
+    x: width * 0.5,
+    y: height * 0.34,
   };
 }
 
@@ -1506,7 +1619,13 @@ function easeInCubic(value) {
 }
 
 function getShipMuzzle(width, height, shot = game) {
-  const pose = getShipPose(width, height, shot.lane ?? game.lane, shot.laneTarget ?? game.laneTarget);
+  const pose = getShipPose(
+    width,
+    height,
+    shot.lane ?? game.lane,
+    shot.laneTarget ?? game.laneTarget,
+    shot.laneVelocity ?? game.laneVelocity,
+  );
   const shipWidth = Math.min(width * 0.22, 250);
   const shipHeight = shipWidth * 0.68;
   return {
@@ -1517,10 +1636,11 @@ function getShipMuzzle(width, height, shot = game) {
 
 function getForwardVanishPoint(width, height, shot = {}) {
   const muzzle = getShipMuzzle(width, height, shot);
+  const vanishPoint = getFlightVanishPoint(width, height);
   const towardCenter = (width * 0.5 - muzzle.x) * 0.36;
   return {
     x: muzzle.x + towardCenter,
-    y: height * 0.34,
+    y: vanishPoint.y,
   };
 }
 
@@ -1826,6 +1946,9 @@ function setupHoldControl(button, action) {
     if (game.paused) {
       return;
     }
+    if (tryRestartAfterBossVictory()) {
+      return;
+    }
     if (game.mode !== "flight") {
       if (game.mode === "hack") {
         cancelHack();
@@ -1852,11 +1975,16 @@ function setupHoldControl(button, action) {
 
 setupHoldControl(moveLeftButton, "moveLeft");
 setupHoldControl(moveRightButton, "moveRight");
+setupHoldControl(touchMoveLeftZone, "moveLeft");
+setupHoldControl(touchMoveRightZone, "moveRight");
 
-fireButton.addEventListener("pointerdown", (event) => {
+function handleFirePointerDown(event) {
   event.preventDefault();
   event.stopPropagation();
   if (game.paused) {
+    return;
+  }
+  if (tryRestartAfterBossVictory()) {
     return;
   }
   if (game.mode === "hack") {
@@ -1864,13 +1992,19 @@ fireButton.addEventListener("pointerdown", (event) => {
     return;
   }
   fireWeapon();
-});
+}
+
+fireButton.addEventListener("pointerdown", handleFirePointerDown);
+touchFireZone.addEventListener("pointerdown", handleFirePointerDown);
 
 weaponButtons.forEach((button) => {
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (game.paused) {
+      return;
+    }
+    if (tryRestartAfterBossVictory()) {
       return;
     }
     if (game.mode === "hack") {
@@ -1880,16 +2014,59 @@ weaponButtons.forEach((button) => {
   });
 });
 
-hackButton.addEventListener("pointerdown", (event) => {
+weaponDock.addEventListener("pointerdown", (event) => {
+  if (event.target !== weaponDock) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (game.paused) {
+    return;
+  }
+  if (tryRestartAfterBossVictory()) {
+    return;
+  }
+  if (game.mode === "hack") {
+    cancelHack();
+  }
+  if (game.mode === "flight") {
+    cycleWeapon();
+  }
+});
+
+function handleHackPointerDown(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (game.paused) {
+    return;
+  }
+  if (tryRestartAfterBossVictory()) {
     return;
   }
   if (game.mode === "hack") {
     cancelHack();
   } else {
     enterHack();
+  }
+}
+
+hackButton.addEventListener("pointerdown", handleHackPointerDown);
+touchHackZone.addEventListener("pointerdown", handleHackPointerDown);
+
+touchWeaponZone.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (game.paused) {
+    return;
+  }
+  if (tryRestartAfterBossVictory()) {
+    return;
+  }
+  if (game.mode === "hack") {
+    cancelHack();
+  }
+  if (game.mode === "flight") {
+    cycleWeapon();
   }
 });
 
@@ -1926,9 +2103,8 @@ document.addEventListener("pointerdown", (event) => {
     return;
   }
 
-  if (game.bossDefeated) {
+  if (tryRestartAfterBossVictory()) {
     event.preventDefault();
-    resetGame();
     return;
   }
 

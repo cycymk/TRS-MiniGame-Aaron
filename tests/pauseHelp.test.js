@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
@@ -16,9 +17,9 @@ const mimeTypes = {
 
 test("pause icon opens help modal with game and control instructions", async (t) => {
   const { server, url } = await startStaticServer();
-  const browser = await chromium.launch();
-
   t.after(() => server.close());
+
+  const browser = await launchBrowser();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
@@ -41,9 +42,9 @@ test("pause icon opens help modal with game and control instructions", async (t)
 
 test("pause modal freezes hack countdown until the game resumes", async (t) => {
   const { server, url } = await startStaticServer();
-  const browser = await chromium.launch();
-
   t.after(() => server.close());
+
+  const browser = await launchBrowser();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
@@ -71,6 +72,27 @@ async function startGame(page) {
   await page.locator("#startOverlay").click();
   await page.locator("#startOverlay").waitFor({ state: "hidden" });
   await page.waitForTimeout(1500);
+}
+
+async function launchBrowser() {
+  try {
+    return await chromium.launch();
+  } catch (error) {
+    const executablePath = findSystemBrowser();
+    if (!executablePath) {
+      throw error;
+    }
+    return chromium.launch({ executablePath });
+  }
+}
+
+function findSystemBrowser() {
+  return [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  ].find((browserPath) => existsSync(browserPath));
 }
 
 async function startStaticServer() {
