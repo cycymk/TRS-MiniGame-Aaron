@@ -1,10 +1,14 @@
-export const BOARD_SIZE = 6;
+export const DEFAULT_BOARD_SIZE = 6;
+export const BOARD_SIZE = DEFAULT_BOARD_SIZE;
+export const MIN_BOARD_SIZE = 4;
+export const MAX_BOARD_SIZE = 7;
 export const HACK_DURATION_MS = 5000;
 
 export const NODE_LABELS = {
   start: "S",
   core: "CORE",
   boost: "+",
+  weapon: "W",
   trap: "!",
   block: "X",
   empty: "",
@@ -42,18 +46,20 @@ export function createInitialHackState({ board = DEFAULT_BOARD, now = 0 } = {}) 
     cursor: { ...start },
     path: [{ ...start }],
     boostsCollected: 0,
+    weaponsCollected: 0,
     status: "running",
     startedAt: now,
     expiresAt: now + HACK_DURATION_MS,
   };
 }
 
-export function createRandomHackBoard({ random = Math.random } = {}) {
-  const board = Array.from({ length: BOARD_SIZE }, () =>
-    Array.from({ length: BOARD_SIZE }, () => "empty"),
+export function createRandomHackBoard({ random = Math.random, size = DEFAULT_BOARD_SIZE } = {}) {
+  const boardSize = clamp(Math.round(size), MIN_BOARD_SIZE, MAX_BOARD_SIZE);
+  const board = Array.from({ length: boardSize }, () =>
+    Array.from({ length: boardSize }, () => "empty"),
   );
-  const start = { row: randomInt(random, 0, BOARD_SIZE - 1), col: 0 };
-  const core = { row: randomInt(random, 0, BOARD_SIZE - 1), col: BOARD_SIZE - 1 };
+  const start = { row: randomInt(random, 0, boardSize - 1), col: 0 };
+  const core = { row: randomInt(random, 0, boardSize - 1), col: boardSize - 1 };
   const route = buildRoute(start, core, random);
   const routeKeys = new Set(route.map(pointKey));
 
@@ -63,15 +69,18 @@ export function createRandomHackBoard({ random = Math.random } = {}) {
   const routeRewardCells = route
     .slice(1, -1)
     .filter((point) => board[point.row][point.col] === "empty");
-  shuffle(routeRewardCells, random)
-    .slice(0, Math.min(2, routeRewardCells.length))
-    .forEach((point) => {
-      board[point.row][point.col] = "boost";
-    });
+  const shuffledRewardCells = shuffle(routeRewardCells, random);
+  const weaponCell = shuffledRewardCells.shift();
+  if (weaponCell) {
+    board[weaponCell.row][weaponCell.col] = "weapon";
+  }
+  shuffledRewardCells.slice(0, Math.min(2, shuffledRewardCells.length)).forEach((point) => {
+    board[point.row][point.col] = "boost";
+  });
 
   const offRouteCells = [];
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
+  for (let row = 0; row < boardSize; row += 1) {
+    for (let col = 0; col < boardSize; col += 1) {
       const point = { row, col };
       if (!routeKeys.has(pointKey(point))) {
         offRouteCells.push(point);
@@ -80,9 +89,12 @@ export function createRandomHackBoard({ random = Math.random } = {}) {
   }
 
   shuffle(offRouteCells, random);
-  placeNodes(board, offRouteCells, "block", 3 + randomInt(random, 0, 2));
-  placeNodes(board, offRouteCells, "trap", 3 + randomInt(random, 0, 2));
-  placeNodes(board, offRouteCells, "boost", 3 + randomInt(random, 0, 2));
+  const difficulty = Math.max(0, boardSize - MIN_BOARD_SIZE);
+  placeNodes(board, offRouteCells, "block", 1 + difficulty + randomInt(random, 0, 1));
+  if (boardSize > MIN_BOARD_SIZE) {
+    placeNodes(board, offRouteCells, "trap", difficulty + randomInt(random, 0, 1));
+  }
+  placeNodes(board, offRouteCells, "boost", 1 + difficulty + randomInt(random, 0, 1));
 
   return board;
 }
@@ -113,7 +125,7 @@ export function moveHackCursor(state, direction) {
     col: state.cursor.col + delta.col,
   };
 
-  if (!isInsideBoard(next) || getNode(state.board, next) === "block") {
+  if (!isInsideBoard(next, state.board) || getNode(state.board, next) === "block") {
     return state;
   }
 
@@ -125,6 +137,13 @@ export function moveHackCursor(state, direction) {
     nextNode === "boost" && !hasVisitedBoost
       ? state.boostsCollected + 1
       : state.boostsCollected;
+  const hasVisitedWeapon = state.path.some(
+    (point) => point.row === next.row && point.col === next.col,
+  );
+  const weaponsCollected =
+    nextNode === "weapon" && !hasVisitedWeapon
+      ? state.weaponsCollected + 1
+      : state.weaponsCollected;
   const status =
     nextNode === "trap" ? "failed" : nextNode === "core" ? "success" : "running";
 
@@ -133,6 +152,7 @@ export function moveHackCursor(state, direction) {
     cursor: next,
     path: [...state.path, next],
     boostsCollected,
+    weaponsCollected,
     status,
   };
 }
@@ -310,12 +330,12 @@ function getNode(board, point) {
   return board[point.row][point.col];
 }
 
-function isInsideBoard(point) {
+function isInsideBoard(point, board) {
   return (
     point.row >= 0 &&
-    point.row < BOARD_SIZE &&
+    point.row < board.length &&
     point.col >= 0 &&
-    point.col < BOARD_SIZE
+    point.col < board[0].length
   );
 }
 

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BOARD_SIZE,
+  MIN_BOARD_SIZE,
   applyShieldedBossDamage,
   applyPlayerDamage,
   createInitialHackState,
@@ -92,6 +93,25 @@ test("boost nodes are counted when routing through the hack board", () => {
   assert.equal(state.status, "success");
 });
 
+test("weapon nodes are counted once when routing through the hack board", () => {
+  let state = createInitialHackState({
+    board: [
+      ["start", "weapon", "weapon", "core"],
+      ["empty", "empty", "empty", "empty"],
+      ["empty", "empty", "empty", "empty"],
+      ["empty", "empty", "empty", "empty"],
+    ],
+  });
+
+  state = moveHackCursor(state, "right");
+  state = moveHackCursor(state, "left");
+  state = moveHackCursor(state, "right");
+  state = moveHackCursor(state, "right");
+
+  assert.equal(state.weaponsCollected, 2);
+  assert.equal(state.status, "running");
+});
+
 test("hack success opens a break window that grows by one second per boost", () => {
   assert.equal(resolveHackBreakDuration({ boostsCollected: 0 }), 4000);
   assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 5000);
@@ -171,8 +191,23 @@ test("random hack boards keep one start, one core, boosts, traps, and a valid ro
   assert.equal(board.every((row) => row.length === BOARD_SIZE), true);
   assert.equal(cells.filter((node) => node === "start").length, 1);
   assert.equal(cells.filter((node) => node === "core").length, 1);
-  assert.equal(cells.filter((node) => node === "boost").length >= 3, true);
+  assert.equal(cells.filter((node) => node === "weapon").length, 1);
+  assert.equal(cells.filter((node) => node === "boost").length >= 2, true);
   assert.equal(cells.filter((node) => node === "trap").length >= 2, true);
+  assert.equal(hasPath(board), true);
+});
+
+test("early hack board is 4x4 with a weapon node and no traps", () => {
+  const board = createRandomHackBoard({
+    size: MIN_BOARD_SIZE,
+    random: makeRandom([0.2, 0.7, 0.1, 0.9, 0.35]),
+  });
+  const cells = board.flat();
+
+  assert.equal(board.length, MIN_BOARD_SIZE);
+  assert.equal(board.every((row) => row.length === MIN_BOARD_SIZE), true);
+  assert.equal(cells.filter((node) => node === "weapon").length, 1);
+  assert.equal(cells.filter((node) => node === "trap").length, 0);
   assert.equal(hasPath(board), true);
 });
 
@@ -241,9 +276,9 @@ function hasPath(board) {
       const key = `${next.row},${next.col}`;
       if (
         next.row < 0 ||
-        next.row >= BOARD_SIZE ||
+        next.row >= board.length ||
         next.col < 0 ||
-        next.col >= BOARD_SIZE ||
+        next.col >= board[0].length ||
         visited.has(key) ||
         board[next.row][next.col] === "block" ||
         board[next.row][next.col] === "trap"

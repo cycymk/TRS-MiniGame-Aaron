@@ -592,6 +592,16 @@ body {
   box-shadow: 0 0 14px rgba(81, 199, 255, 0.74);
 }
 
+.cell.weapon {
+  color: #1b1200;
+  background:
+    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.78), transparent 18%),
+    linear-gradient(145deg, #fff483, #ffca42 64%, #b46b08);
+  box-shadow:
+    0 0 16px rgba(255, 218, 84, 0.86),
+    inset 0 0 10px rgba(255, 255, 255, 0.22);
+}
+
 .cell.trap {
   color: #fff;
   background: linear-gradient(145deg, #ff7486, #ff3e58 62%, #681526);
@@ -635,8 +645,8 @@ body {
 }
 
 .weapon-dock {
-  right: 2.7%;
-  bottom: 7.4%;
+  left: 2.7%;
+  bottom: 8.8%;
   display: flex;
   gap: 0.9rem;
   align-items: flex-end;
@@ -694,6 +704,29 @@ body {
   font-size: clamp(0.5rem, 0.8vw, 0.68rem);
 }
 
+.weapon.locked {
+  color: rgba(210, 222, 232, 0.34);
+  border-color: rgba(210, 222, 232, 0.18);
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0 5px, transparent 5px 10px),
+    rgba(4, 9, 15, 0.48);
+  box-shadow: inset 0 0 16px rgba(255, 255, 255, 0.04);
+  cursor: default;
+  filter: grayscale(0.9);
+  pointer-events: none;
+}
+
+.weapon.control-flash,
+.weapon-dock.control-flash,
+.control-button.control-flash,
+.hack-action-button.control-flash {
+  filter: brightness(1.28);
+  box-shadow:
+    0 0 0 0.2rem rgba(255, 232, 105, 0.16),
+    0 0 28px rgba(255, 222, 96, 0.58),
+    inset 0 0 22px rgba(255, 248, 188, 0.2);
+}
+
 .mobile-touch-layer {
   position: absolute;
   inset: 0;
@@ -717,46 +750,66 @@ body {
 .touch-zone-left {
   z-index: 1;
   left: 0;
-  top: 54%;
-  width: 46%;
-  height: 46%;
-  clip-path: polygon(0 0, 72% 8%, 98% 100%, 0 100%);
+  bottom: 0;
+  width: 36%;
+  height: 31%;
+  clip-path: polygon(0 0, 92% 4%, 100% 100%, 0 100%);
 }
 
 .touch-zone-fire {
   z-index: 4;
-  left: 31%;
-  top: 54%;
-  width: 32%;
-  height: 46%;
-  clip-path: polygon(22% 0, 84% 0, 100% 100%, 0 100%);
+  left: 29%;
+  bottom: 0;
+  width: 35%;
+  height: 33%;
+  clip-path: polygon(16% 0, 84% 0, 100% 100%, 0 100%);
 }
 
 .touch-zone-right {
   z-index: 2;
-  left: 42%;
-  top: 54%;
+  right: 23%;
+  bottom: 0;
   width: 34%;
-  height: 46%;
-  clip-path: polygon(38% 10%, 100% 0, 100% 100%, 0 100%);
+  height: 31%;
+  clip-path: polygon(8% 4%, 100% 0, 100% 100%, 0 100%);
 }
 
 .touch-zone-hack {
   z-index: 3;
   right: 0;
-  top: 46%;
-  width: 30%;
-  height: 38%;
-  clip-path: polygon(28% 0, 100% 0, 100% 100%, 0 88%, 0 32%);
+  top: 44%;
+  width: 28%;
+  height: 40%;
+  clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 88%, 0 28%);
 }
 
 .touch-zone-weapon {
   z-index: 5;
-  right: 0;
-  bottom: 0;
-  width: 31%;
-  height: 27%;
-  clip-path: polygon(5% 0, 100% 0, 100% 100%, 0 100%);
+  left: 0;
+  top: 48%;
+  width: 30%;
+  height: 34%;
+  clip-path: polygon(0 0, 100% 12%, 86% 100%, 0 100%);
+}
+
+.mobile-touch-zone.pressed,
+.mobile-touch-zone.control-flash {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 232, 100, 0.22), transparent 62%);
+  filter: drop-shadow(0 0 18px rgba(255, 226, 92, 0.58));
+}
+
+.reward-popup {
+  position: absolute;
+  z-index: 12;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  color: #fff7c2;
+  font-size: clamp(0.72rem, 1.35vw, 1.05rem);
+  font-weight: 950;
+  text-shadow:
+    0 0 8px rgba(255, 202, 52, 0.96),
+    0 2px 8px rgba(0, 0, 0, 0.88);
+  animation: reward-float 1200ms ease-out forwards;
 }
 
 .control-strip {
@@ -1020,6 +1073,22 @@ button {
   }
 }
 
+@keyframes reward-float {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -72%) scale(0.86);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(-50%, -190%) scale(1.08);
+  }
+}
+
 @keyframes tap-blink {
   from {
     opacity: 0.34;
@@ -1109,7 +1178,7 @@ button {
   }
 
   .weapon-dock {
-    right: 1.8%;
+    left: 1.8%;
     gap: 0.45rem;
   }
 
@@ -1165,7 +1234,8 @@ button {
   }
 
   .weapon-dock {
-    bottom: 9%;
+    left: 3%;
+    bottom: 11.5%;
   }
 
   .control-strip {

@@ -52,6 +52,7 @@ const pauseButton = document.querySelector("#pauseButton");
 const pauseOverlay = document.querySelector("#pauseOverlay");
 const resumeButton = document.querySelector("#resumeButton");
 const toast = document.querySelector("#toast");
+const gameShell = document.querySelector(".game-shell");
 
 const lanes = [-0.38, 0, 0.38];
 const stars = Array.from({ length: 150 }, () => ({
@@ -85,6 +86,8 @@ const SHIP_LANE_REST_THRESHOLD = 0.002;
 const SHIP_BANK_MAX_ROTATION = 0.17;
 const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
+const HACK_MIN_BOARD_SIZE = 4;
+const HACK_MAX_BOARD_SIZE = 7;
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -137,6 +140,17 @@ const game = {
   messageUntil: 0,
   lastShotAt: 0,
   selectedWeapon: "machine",
+  weaponUnlocks: {
+    machine: true,
+    spread: false,
+    laser: false,
+  },
+  weaponLevels: {
+    machine: 1,
+    spread: 1,
+    laser: 1,
+  },
+  hackLevel: 0,
   bossMode: "normal",
   bossModeStartedAt: performance.now(),
   bossBeamHitAt: 0,
@@ -169,7 +183,10 @@ function enterHack(now = performance.now()) {
   }
 
   game.mode = "hack";
-  game.hack = createInitialHackState({ board: createRandomHackBoard(), now });
+  game.hack = createInitialHackState({
+    board: createRandomHackBoard({ size: getHackBoardSize() }),
+    now,
+  });
   game.boostMultiplierPreview = 1;
   renderHackGrid();
   setToast("BULLET TIME LINK OPEN", 900);
@@ -186,6 +203,10 @@ function cancelHack() {
   setToast("HACK CANCELLED", 650);
 }
 
+function getHackBoardSize() {
+  return Math.min(HACK_MAX_BOARD_SIZE, HACK_MIN_BOARD_SIZE + game.hackLevel);
+}
+
 function fireWeapon(now = performance.now()) {
   const weapon = weaponConfigs[game.selectedWeapon];
   if (
@@ -198,7 +219,7 @@ function fireWeapon(now = performance.now()) {
     return;
   }
 
-  const hit = applyBossDamage(weapon.damage, isBossBreakActive() ? "break" : "normal");
+  const hit = applyBossDamage(getWeaponDamage(game.selectedWeapon), isBossBreakActive() ? "break" : "normal");
   game.lastShotAt = now;
   game.ammo = Math.max(0, game.ammo - weapon.ammoCost);
   recordShieldImpact(hit, now, game.selectedWeapon);
@@ -236,8 +257,11 @@ function resolveHack(status) {
     const breakDuration = resolveHackBreakDuration({
       boostsCollected: game.hack.boostsCollected,
     });
+    const weaponPickups = getSuccessfulHackWeaponPickups(game.hack);
     game.bossBreakUntil = Math.max(game.bossBreakUntil, now + breakDuration);
     game.ammo = Math.min(100, game.ammo + 26);
+    game.hackLevel = Math.min(game.hackLevel + 1, HACK_MAX_BOARD_SIZE - HACK_MIN_BOARD_SIZE);
+    applyHackWeaponRewards(weaponPickups);
     damageReadout.textContent = `SHIELD BREAK ${formatTimeSeconds(breakDuration)}`;
     setToast(`HACK SUCCESS / BREAK ${formatTimeSeconds(breakDuration)}`, 1400);
   } else {
@@ -280,6 +304,69 @@ function applyDamageToPlayer(damage, { readout = "HULL DAMAGE", toast: toastMess
 
 function canDamagePlayer() {
   return game.mode === "flight" || game.mode === "hack";
+}
+
+function getSuccessfulHackWeaponPickups(hackState) {
+  const uniquePickups = [];
+  const seen = new Set();
+
+  hackState.path.forEach((point) => {
+    const key = `${point.row},${point.col}`;
+    if (seen.has(key) || hackState.board[point.row]?.[point.col] !== "weapon") {
+      return;
+    }
+    seen.add(key);
+    uniquePickups.push(point);
+  });
+
+  return uniquePickups;
+}
+
+function applyHackWeaponRewards(pickups) {
+  pickups.forEach((point) => {
+    const reward = grantWeaponReward();
+    showHackRewardPopup(point, reward.message);
+    setToast(reward.message, 900);
+  });
+  updateWeaponUi();
+}
+
+function grantWeaponReward(random = Math.random) {
+  if (!game.weaponUnlocks.spread) {
+    game.weaponUnlocks.spread = true;
+    return { type: "unlock", weapon: "spread", message: "SPREAD Get!" };
+  }
+
+  if (!game.weaponUnlocks.laser) {
+    game.weaponUnlocks.laser = true;
+    return { type: "unlock", weapon: "laser", message: "LZ Get!" };
+  }
+
+  const unlockedWeapons = weaponOrder.filter((type) => game.weaponUnlocks[type]);
+  const weapon = unlockedWeapons[Math.floor(random() * unlockedWeapons.length)];
+  game.weaponLevels[weapon] += 1;
+  return {
+    type: "level",
+    weapon,
+    message: `${weaponConfigs[weapon].short} Level UP!`,
+  };
+}
+
+function showHackRewardPopup(point, message) {
+  const cell = hackGrid.querySelector(`[data-row="${point.row}"][data-col="${point.col}"]`);
+  if (!cell || !gameShell) {
+    return;
+  }
+
+  const cellRect = cell.getBoundingClientRect();
+  const shellRect = gameShell.getBoundingClientRect();
+  const popup = document.createElement("div");
+  popup.className = "reward-popup";
+  popup.textContent = message;
+  popup.style.left = `${cellRect.left + cellRect.width / 2 - shellRect.left}px`;
+  popup.style.top = `${cellRect.top - shellRect.top}px`;
+  gameShell.append(popup);
+  window.setTimeout(() => popup.remove(), 1200);
 }
 
 function maybeResetBoss() {
@@ -414,6 +501,17 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.speedPulse = 0;
   game.lastShotAt = 0;
   game.selectedWeapon = "machine";
+  game.weaponUnlocks = {
+    machine: true,
+    spread: false,
+    laser: false,
+  };
+  game.weaponLevels = {
+    machine: 1,
+    spread: 1,
+    laser: 1,
+  };
+  game.hackLevel = 0;
   game.bossMode = "normal";
   game.bossModeStartedAt = now;
   game.bossBeamHitAt = 0;
@@ -693,6 +791,7 @@ function renderHackGrid() {
     return;
   }
 
+  hackGrid.style.gridTemplateColumns = `repeat(${game.hack.board[0].length}, 1fr)`;
   const visited = new Set(game.hack.path.map((point) => `${point.row},${point.col}`));
   game.hack.board.forEach((row, rowIndex) => {
     row.forEach((node, colIndex) => {
@@ -728,7 +827,7 @@ function renderHackGrid() {
   const multiplierText =
     game.hack.boostsCollected > 0 ? `x${game.boostMultiplierPreview}` : "x1";
   boostCounter.textContent = multiplierText;
-  routeStats.textContent = `${game.hack.boostsCollected} BOOST`;
+  routeStats.textContent = `${game.hack.board.length}x${game.hack.board.length} / ${game.hack.weaponsCollected} WPN`;
   hackStatus.textContent =
     game.hack.status === "success"
       ? "CORE BREACHED"
@@ -818,7 +917,7 @@ function updateShipMovement(delta) {
 }
 
 function setWeapon(type, { announce = true } = {}) {
-  if (!weaponConfigs[type]) {
+  if (!weaponConfigs[type] || !game.weaponUnlocks[type]) {
     return;
   }
 
@@ -830,26 +929,49 @@ function setWeapon(type, { announce = true } = {}) {
 }
 
 function cycleWeapon() {
-  const index = weaponOrder.indexOf(game.selectedWeapon);
-  const next = weaponOrder[(index + 1) % weaponOrder.length];
+  const unlockedWeapons = weaponOrder.filter((type) => game.weaponUnlocks[type]);
+  const index = unlockedWeapons.indexOf(game.selectedWeapon);
+  const next = unlockedWeapons[(index + 1) % unlockedWeapons.length] ?? "machine";
   setWeapon(next);
+}
+
+function getWeaponDamage(type) {
+  const level = Math.max(1, game.weaponLevels[type] ?? 1);
+  return weaponConfigs[type].damage * (1 + (level - 1) * 0.28);
 }
 
 function updateWeaponUi() {
   weaponButtons.forEach((button) => {
-    const isActive = button.dataset.weapon === game.selectedWeapon;
+    const weaponType = button.dataset.weapon;
+    const isUnlocked = game.weaponUnlocks[weaponType];
+    const isActive = isUnlocked && weaponType === game.selectedWeapon;
     button.classList.toggle("active", isActive);
+    button.classList.toggle("locked", !isUnlocked);
+    button.disabled = !isUnlocked;
     button.setAttribute("aria-pressed", String(isActive));
+    button.setAttribute("aria-disabled", String(!isUnlocked));
+    button.querySelector("small").textContent = isUnlocked
+      ? `${weaponConfigs[weaponType].short} Lv${game.weaponLevels[weaponType]}`
+      : "LOCK";
   });
 
   const weapon = weaponConfigs[game.selectedWeapon];
-  fireButton.querySelector("small").textContent = `0 ${weapon.short}`;
+  fireButton.querySelector("small").textContent = `0 ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
 }
 
 function setToast(message, duration) {
   toast.textContent = message;
   toast.classList.remove("hidden");
   game.messageUntil = performance.now() + duration;
+}
+
+function flashControl(element, duration = 180) {
+  if (!element) {
+    return;
+  }
+
+  element.classList.add("control-flash");
+  window.setTimeout(() => element.classList.remove("control-flash"), duration);
 }
 
 function update(now) {
@@ -1746,16 +1868,16 @@ function drawShots(width, height, now) {
     }
     const alpha = 1 - age / lifetime;
     const target = getForwardVanishPoint(width, height, blast);
-    const radius = blast.type === "spread" ? 16 : blast.type === "machine" ? 10 : 28;
+    const radius = blast.type === "spread" ? 21 : blast.type === "machine" ? 14 : 34;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.strokeStyle = `rgba(125, 241, 255, ${alpha})`;
-    ctx.lineWidth = blast.small ? 2.5 : 4.5;
+    ctx.lineWidth = blast.small ? 3.4 : 5.8;
     ctx.beginPath();
     ctx.arc(target.x, target.y, radius * (1 + age / lifetime), 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-    ctx.lineWidth = blast.small ? 1 : 2;
+    ctx.lineWidth = blast.small ? 1.4 : 2.6;
     ctx.stroke();
     ctx.restore();
   }
@@ -1772,15 +1894,15 @@ function drawMachineTracer(width, height, shot, age, alpha) {
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   ctx.shadowColor = "rgba(102, 236, 255, 0.92)";
-  ctx.shadowBlur = 12;
+  ctx.shadowBlur = 22;
   ctx.strokeStyle = `rgba(145, 245, 255, ${0.86 * alpha})`;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 3.2;
   ctx.beginPath();
   ctx.moveTo(start.x, start.y);
   ctx.lineTo(end.x, end.y);
   ctx.stroke();
   ctx.strokeStyle = `rgba(255, 255, 255, ${0.74 * alpha})`;
-  ctx.lineWidth = 0.9;
+  ctx.lineWidth = 1.25;
   ctx.stroke();
   ctx.restore();
 }
@@ -1810,7 +1932,7 @@ function drawSpreadShot(width, height, shot, age, alpha) {
       index === 1
         ? `rgba(129, 239, 255, ${0.72 * alpha})`
         : `rgba(255, 211, 91, ${0.78 * alpha})`;
-    ctx.lineWidth = 2.6 + pulse;
+    ctx.lineWidth = 3.6 + pulse * 1.2;
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.lineTo(end.x, end.y);
@@ -1818,7 +1940,7 @@ function drawSpreadShot(width, height, shot, age, alpha) {
 
     ctx.fillStyle = `rgba(255, 252, 222, ${0.82 * alpha})`;
     ctx.beginPath();
-    ctx.arc(end.x, end.y, 3.4 + pulse * 1.4, 0, Math.PI * 2);
+    ctx.arc(end.x, end.y, 5 + pulse * 1.8, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.restore();
@@ -1854,8 +1976,8 @@ function drawPlayerLaser(width, height, shot, age, alpha) {
     target.y,
     nx,
     ny,
-    42,
-    8,
+    52,
+    11,
     `rgba(78, 220, 255, ${0.84 * alpha})`,
     shimmer * 0.4,
   );
@@ -1863,13 +1985,13 @@ function drawPlayerLaser(width, height, shot, age, alpha) {
   ctx.globalCompositeOperation = "lighter";
   ctx.shadowColor = "rgba(80, 219, 255, 0.96)";
   ctx.shadowBlur = 36;
-  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 23, 4.5, outerGradient, shimmer);
+  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 29, 6, outerGradient, shimmer);
   ctx.shadowBlur = 18;
-  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 8, 1.4, coreGradient, -shimmer * 0.35);
+  drawBeamCone(muzzle.x, muzzle.y, target.x, target.y, nx, ny, 10, 2, coreGradient, -shimmer * 0.35);
 
   ctx.strokeStyle = `rgba(238, 255, 255, ${Math.min(1, 0.32 + 0.68 * alpha)})`;
   ctx.lineCap = "round";
-  ctx.lineWidth = 15;
+  ctx.lineWidth = 19;
   ctx.beginPath();
   ctx.moveTo(muzzle.x, muzzle.y);
   ctx.lineTo(target.x, target.y);
@@ -1879,7 +2001,7 @@ function drawPlayerLaser(width, height, shot, age, alpha) {
   ctx.shadowColor = "rgba(135, 238, 255, 0.95)";
   ctx.shadowBlur = 18;
   ctx.strokeStyle = `rgba(233, 255, 255, ${Math.min(1, 0.38 + 0.62 * alpha)})`;
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 8;
   ctx.beginPath();
   ctx.moveTo(muzzle.x, muzzle.y);
   ctx.lineTo(target.x, target.y);
@@ -1887,7 +2009,7 @@ function drawPlayerLaser(width, height, shot, age, alpha) {
 
   ctx.globalCompositeOperation = "lighter";
   ctx.strokeStyle = `rgba(104, 231, 255, ${0.78 * alpha})`;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 3.1;
   ctx.beginPath();
   ctx.moveTo(muzzle.x + nx * 28, muzzle.y + ny * 28);
   ctx.quadraticCurveTo(
@@ -1905,7 +2027,7 @@ function drawPlayerLaser(width, height, shot, age, alpha) {
   );
   ctx.stroke();
 
-  const flare = 12 + Math.sin(age * 0.12 + shot.seed) * 4;
+  const flare = 16 + Math.sin(age * 0.12 + shot.seed) * 5;
   ctx.fillStyle = `rgba(232, 253, 255, ${0.78 * alpha})`;
   ctx.beginPath();
   ctx.arc(muzzle.x, muzzle.y, flare, 0, Math.PI * 2);
@@ -1957,6 +2079,7 @@ function setupHoldControl(button, action) {
     }
     button.setPointerCapture?.(event.pointerId);
     button.classList.add("pressed");
+    flashControl(button, 260);
     moveFlight(action);
     stop();
     button.classList.add("pressed");
@@ -1991,6 +2114,8 @@ function handleFirePointerDown(event) {
     cancelHack();
     return;
   }
+  flashControl(fireButton);
+  flashControl(touchFireZone);
   fireWeapon();
 }
 
@@ -2010,6 +2135,7 @@ weaponButtons.forEach((button) => {
     if (game.mode === "hack") {
       cancelHack();
     }
+    flashControl(button);
     setWeapon(button.dataset.weapon);
   });
 });
@@ -2030,6 +2156,7 @@ weaponDock.addEventListener("pointerdown", (event) => {
     cancelHack();
   }
   if (game.mode === "flight") {
+    flashControl(weaponDock);
     cycleWeapon();
   }
 });
@@ -2046,6 +2173,8 @@ function handleHackPointerDown(event) {
   if (game.mode === "hack") {
     cancelHack();
   } else {
+    flashControl(hackButton);
+    flashControl(touchHackZone);
     enterHack();
   }
 }
@@ -2066,6 +2195,8 @@ touchWeaponZone.addEventListener("pointerdown", (event) => {
     cancelHack();
   }
   if (game.mode === "flight") {
+    flashControl(touchWeaponZone);
+    flashControl(weaponDock);
     cycleWeapon();
   }
 });
