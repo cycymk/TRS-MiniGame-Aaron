@@ -21,6 +21,7 @@ const bossImage = new Image();
 bossImage.src = new URL("../public/assets/boss-mothership.png", import.meta.url).href;
 const hpBar = document.querySelector("#hpBar");
 const ammoBar = document.querySelector("#ammoBar");
+const distanceReadout = document.querySelector("#distanceReadout");
 const bossBar = document.querySelector("#bossBar");
 const bossShieldBar = document.querySelector("#bossShieldBar");
 const damageReadout = document.querySelector("#damageReadout");
@@ -90,14 +91,15 @@ const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
 const HACK_MIN_BOARD_SIZE = 4;
 const HACK_MAX_BOARD_SIZE = 7;
+const DISTANCE_LY_PER_SECOND = 0.42;
 const FEVER_MAX = 100;
 const FEVER_DURATION_MS = 7000;
 const FEVER_GAINS = {
-  hit: 1.8,
-  hullHit: 3.2,
-  shieldBreak: 9,
-  hackSuccess: 18,
-  weaponReward: 8,
+  hit: 0.45,
+  hullHit: 0.9,
+  shieldBreak: 4,
+  hackSuccess: 8,
+  weaponReward: 3,
 };
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
@@ -148,6 +150,7 @@ const game = {
   bossShieldHp: BOSS_MAX_SHIELD,
   hack: null,
   boostMultiplierPreview: 1,
+  distanceLy: 0,
   travel: 0,
   speedPulse: 0,
   messageUntil: 0,
@@ -520,6 +523,8 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.bossShieldHp = BOSS_MAX_SHIELD;
   game.hack = null;
   game.boostMultiplierPreview = 1;
+  game.distanceLy = 0;
+  game.travel = 0;
   game.speedPulse = 0;
   game.lastShotAt = 0;
   game.selectedWeapon = "machine";
@@ -756,6 +761,10 @@ function updateBoss(now, delta) {
 
 function isGameplayActive() {
   return game.mode === "flight" || game.mode === "hack";
+}
+
+function isDistanceCountingMode() {
+  return ["intro", "flight", "hack", "bossDying", "victory", "playerDestroyed"].includes(game.mode);
 }
 
 function updateBossShieldRestore(now) {
@@ -1068,6 +1077,9 @@ function update(now) {
   const delta = Math.min(48, now - game.lastTime);
   game.lastTime = now;
   const speed = game.mode === "hack" ? 0.35 : 1;
+  if (isDistanceCountingMode()) {
+    game.distanceLy += delta * 0.001 * DISTANCE_LY_PER_SECOND * speed;
+  }
   game.travel += delta * 0.0018 * speed;
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
   updateIntro(now, delta);
@@ -1175,6 +1187,7 @@ function updateHud() {
     ? FEVER_MAX
     : Math.max(0, Math.min(FEVER_MAX, game.fever));
   const feverRemaining = feverActive ? Math.max(0, game.feverActiveUntil - now) : 0;
+  distanceReadout.textContent = formatDistanceLy(game.distanceLy);
   hpBar.style.width = `${Math.max(0, Math.min(100, game.hp))}%`;
   ammoBar.style.width = `${game.ammo}%`;
   bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
@@ -1197,6 +1210,14 @@ function updateHud() {
     icon.classList.toggle("spent", index >= game.lives);
     livesIcons.append(icon);
   }
+}
+
+function formatDistanceLy(distance) {
+  const safeDistance = Math.max(0, distance);
+  if (safeDistance >= 1000) {
+    return `${Math.floor(safeDistance).toLocaleString("en-US")} LY`;
+  }
+  return `${safeDistance.toFixed(1).padStart(5, "0")} LY`;
 }
 
 function draw(now) {

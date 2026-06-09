@@ -154,9 +154,10 @@ body {
   width: fit-content;
   padding: 0.12rem 0.72rem 0.3rem 0;
   color: #eef8ff;
-  font-size: clamp(1rem, 2vw, 1.55rem);
+  font-size: clamp(0.92rem, 1.7vw, 1.32rem);
   font-weight: 950;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .score-readout::after {
