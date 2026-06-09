@@ -24,6 +24,8 @@ const ammoBar = document.querySelector("#ammoBar");
 const bossBar = document.querySelector("#bossBar");
 const bossShieldBar = document.querySelector("#bossShieldBar");
 const damageReadout = document.querySelector("#damageReadout");
+const feverPanel = document.querySelector("#feverPanel");
+const feverValue = document.querySelector("#feverValue");
 const startOverlay = document.querySelector("#startOverlay");
 const timerPanel = document.querySelector("#timerPanel");
 const timerValue = document.querySelector("#timerValue");
@@ -88,6 +90,15 @@ const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
 const HACK_MIN_BOARD_SIZE = 4;
 const HACK_MAX_BOARD_SIZE = 7;
+const FEVER_MAX = 100;
+const FEVER_DURATION_MS = 7000;
+const FEVER_GAINS = {
+  hit: 1.8,
+  hullHit: 3.2,
+  shieldBreak: 9,
+  hackSuccess: 18,
+  weaponReward: 8,
+};
 const weaponOrder = ["machine", "spread", "laser"];
 const weaponConfigs = {
   machine: {
@@ -131,6 +142,8 @@ const game = {
   hp: PLAYER_MAX_HP,
   lives: PLAYER_MAX_LIVES,
   ammo: 100,
+  fever: 0,
+  feverActiveUntil: 0,
   bossHp: BOSS_MAX_HP,
   bossShieldHp: BOSS_MAX_SHIELD,
   hack: null,
@@ -209,11 +222,12 @@ function getHackBoardSize() {
 
 function fireWeapon(now = performance.now()) {
   const weapon = weaponConfigs[game.selectedWeapon];
+  const feverActive = isFeverActive(now);
   if (
     game.mode !== "flight" ||
     game.bossDefeated ||
     !weapon ||
-    game.ammo < weapon.ammoCost ||
+    (!feverActive && game.ammo < weapon.ammoCost) ||
     now - game.lastShotAt < weapon.cooldown
   ) {
     return;
@@ -221,7 +235,12 @@ function fireWeapon(now = performance.now()) {
 
   const hit = applyBossDamage(getWeaponDamage(game.selectedWeapon), isBossBreakActive() ? "break" : "normal");
   game.lastShotAt = now;
-  game.ammo = Math.max(0, game.ammo - weapon.ammoCost);
+  if (feverActive) {
+    game.ammo = 100;
+  } else {
+    game.ammo = Math.max(0, game.ammo - weapon.ammoCost);
+  }
+  gainFever(getFeverGainForHit(hit), now);
   recordShieldImpact(hit, now, game.selectedWeapon);
   shots.push({
     born: now,
@@ -262,6 +281,7 @@ function resolveHack(status) {
     game.ammo = Math.min(100, game.ammo + 26);
     game.hackLevel = Math.min(game.hackLevel + 1, HACK_MAX_BOARD_SIZE - HACK_MIN_BOARD_SIZE);
     applyHackWeaponRewards(weaponPickups);
+    gainFever(FEVER_GAINS.hackSuccess + weaponPickups.length * FEVER_GAINS.weaponReward, now);
     damageReadout.textContent = `SHIELD BREAK ${formatTimeSeconds(breakDuration)}`;
     setToast(`HACK SUCCESS / BREAK ${formatTimeSeconds(breakDuration)}`, 1400);
   } else {
@@ -494,6 +514,8 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.hp = PLAYER_MAX_HP;
   game.lives = PLAYER_MAX_LIVES;
   game.ammo = 100;
+  game.fever = 0;
+  game.feverActiveUntil = 0;
   game.bossHp = BOSS_MAX_HP;
   game.bossShieldHp = BOSS_MAX_SHIELD;
   game.hack = null;
@@ -558,6 +580,9 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   game.playerDeathOutcome = null;
   game.promptAction = null;
   game.hp = PLAYER_MAX_HP;
+  if (isFeverActive(now)) {
+    game.ammo = 100;
+  }
   game.lane = 1;
   game.laneTarget = 1;
   game.laneVelocity = 0;
@@ -587,7 +612,7 @@ function beginPlayerDestroyed(outcome, now = performance.now()) {
 
 function continuePlayer(now = performance.now()) {
   game.hp = PLAYER_MAX_HP;
-  game.ammo = Math.min(100, Math.max(game.ammo, 70));
+  game.ammo = isFeverActive(now) ? 100 : Math.min(100, Math.max(game.ammo, 70));
   game.lane = 1;
   game.laneTarget = 1;
   game.laneVelocity = 0;
@@ -667,6 +692,9 @@ function setPaused(paused, now = performance.now()) {
   }
   if (game.bossBreakUntil > 0) {
     game.bossBreakUntil += pausedDuration;
+  }
+  if (game.feverActiveUntil > 0) {
+    game.feverActiveUntil += pausedDuration;
   }
 
   shots.forEach((shot) => {
@@ -940,6 +968,62 @@ function getWeaponDamage(type) {
   return weaponConfigs[type].damage * (1 + (level - 1) * 0.28);
 }
 
+function isFeverActive(now = performance.now()) {
+  return game.feverActiveUntil > now;
+}
+
+function getFeverGainForHit(hit) {
+  if (!hit || game.bossDefeated || isFeverActive()) {
+    return 0;
+  }
+
+  let gain = FEVER_GAINS.hit;
+  if (hit.hullDamage > 0) {
+    gain += FEVER_GAINS.hullHit;
+  }
+  if (hit.shieldBroken) {
+    gain += FEVER_GAINS.shieldBreak;
+  }
+  return gain;
+}
+
+function gainFever(amount, now = performance.now()) {
+  if (amount <= 0 || game.bossDefeated || isFeverActive(now)) {
+    return;
+  }
+
+  game.fever = Math.min(FEVER_MAX, game.fever + amount);
+  if (game.fever >= FEVER_MAX) {
+    activateFever(now);
+  }
+}
+
+function activateFever(now = performance.now()) {
+  game.fever = FEVER_MAX;
+  game.feverActiveUntil = now + FEVER_DURATION_MS;
+  game.ammo = 100;
+  damageReadout.textContent = "FEVER BURST";
+  setToast("FEVER START / 無限彈藥", 1300);
+}
+
+function updateFever(now) {
+  if (!game.feverActiveUntil) {
+    return;
+  }
+
+  if (isFeverActive(now)) {
+    game.ammo = 100;
+    return;
+  }
+
+  game.feverActiveUntil = 0;
+  game.fever = 0;
+  if (!game.bossDefeated && isGameplayActive()) {
+    damageReadout.textContent = "DAMAGE READY";
+    setToast("FEVER END", 900);
+  }
+}
+
 function updateWeaponUi() {
   weaponButtons.forEach((button) => {
     const weaponType = button.dataset.weapon;
@@ -991,9 +1075,14 @@ function update(now) {
   updateBossVictory(now);
   updateBossBreak(now);
   updateBoss(now, delta);
+  updateFever(now);
 
   if (game.mode === "flight") {
-    game.ammo = Math.min(100, game.ammo + delta * 0.012);
+    if (isFeverActive(now)) {
+      game.ammo = 100;
+    } else {
+      game.ammo = Math.min(100, game.ammo + delta * 0.012);
+    }
     updateShipMovement(delta);
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
@@ -1080,11 +1169,26 @@ function updateBossBreak(now) {
 }
 
 function updateHud() {
+  const now = performance.now();
+  const feverActive = isFeverActive(now);
+  const feverProgress = feverActive
+    ? FEVER_MAX
+    : Math.max(0, Math.min(FEVER_MAX, game.fever));
+  const feverRemaining = feverActive ? Math.max(0, game.feverActiveUntil - now) : 0;
   hpBar.style.width = `${Math.max(0, Math.min(100, game.hp))}%`;
   ammoBar.style.width = `${game.ammo}%`;
   bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
   bossShieldBar.style.width = `${(game.bossShieldHp / BOSS_MAX_SHIELD) * 100}%`;
   bossShieldBar.parentElement.classList.toggle("break", isBossBreakActive());
+  feverValue.textContent = feverActive ? `${Math.ceil(feverRemaining / 1000)}s` : `${Math.floor(feverProgress)}%`;
+  feverPanel.style.setProperty("--fever-progress", `${feverProgress}%`);
+  feverPanel.classList.toggle("active", feverActive);
+  ammoBar.parentElement.classList.toggle("fever-active", feverActive);
+  gameShell.classList.toggle("fever-active", feverActive);
+  const weapon = weaponConfigs[game.selectedWeapon];
+  fireButton.querySelector("small").textContent = feverActive
+    ? `FREE ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`
+    : `0 ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
   livesText.textContent = `x ${game.lives}`;
   livesIcons.textContent = "";
   for (let index = 0; index < PLAYER_MAX_LIVES; index += 1) {
@@ -1265,6 +1369,7 @@ function drawBoss(width, height, now) {
   const ringSpeed = cooldown ? 0.00024 : attack ? 0.0024 + chargeProgress * 0.0027 : 0.00076;
   const ringRotation = now * ringSpeed;
   const bossSize = Math.min(width * 0.3, height * 0.48);
+  const bossImageSize = getBossImageRenderSize(bossSize);
   const defeatShake = game.bossDefeated ? (1 - defeatedProgress) * (6 + Math.sin(now * 0.07) * 3) : 0;
   const sink = game.bossDefeated ? easeInCubic(defeatedProgress) * height * 0.2 : 0;
   const shake = attack ? Math.pow(chargeProgress, 1.5) * (2 + Math.sin(now * 0.06) * 2.4) : defeatShake;
@@ -1284,7 +1389,13 @@ function drawBoss(width, height, now) {
   ctx.shadowColor = cooldown ? "rgba(80, 20, 30, 0.24)" : "rgba(255, 44, 52, 0.45)";
   ctx.shadowBlur = cooldown ? 10 : 26 + chargeProgress * 34;
   if (bossImage.complete && bossImage.naturalWidth > 0) {
-    ctx.drawImage(bossImage, -bossSize / 2, -bossSize / 2, bossSize, bossSize);
+    ctx.drawImage(
+      bossImage,
+      -bossImageSize.width / 2,
+      -bossImageSize.height / 2,
+      bossImageSize.width,
+      bossImageSize.height,
+    );
   } else {
     drawFallbackBoss(bossSize);
   }
@@ -1301,6 +1412,18 @@ function drawBoss(width, height, now) {
     drawChargeCountdown(bossSize, chargeProgress);
   }
   ctx.restore();
+}
+
+function getBossImageRenderSize(size) {
+  if (!bossImage.complete || bossImage.naturalWidth <= 0 || bossImage.naturalHeight <= 0) {
+    return { width: size, height: size };
+  }
+
+  const aspect = bossImage.naturalWidth / bossImage.naturalHeight;
+  return {
+    width: size * aspect,
+    height: size,
+  };
 }
 
 function drawActiveBossBeam(width, height, now) {

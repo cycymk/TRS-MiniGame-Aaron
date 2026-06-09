@@ -73,6 +73,11 @@ body {
   background:
     radial-gradient(circle at 50% 54%, transparent 18%, rgba(0, 0, 0, 0.1) 55%, rgba(0, 0, 0, 0.38) 100%),
     linear-gradient(180deg, rgba(2, 10, 18, 0.28), rgba(2, 10, 18, 0.05) 42%, rgba(2, 10, 18, 0.32));
+  transition: filter 220ms ease;
+}
+
+.game-shell.fever-active .scene-grade {
+  filter: saturate(1.3) brightness(1.12);
 }
 
 #spaceCanvas {
@@ -347,21 +352,26 @@ body {
 }
 
 .fever-panel {
+  --fever-progress: 0%;
   top: 10%;
   right: 2.4%;
   display: flex;
   gap: 0.72rem;
   align-items: center;
   font-weight: 950;
+  transition:
+    filter 160ms ease,
+    transform 160ms ease;
 }
 
 .fever-ring {
   position: relative;
   width: clamp(2.8rem, 5.2vw, 4.2rem);
   aspect-ratio: 1;
-  border: 0.25rem solid rgba(255, 228, 105, 0.9);
+  border: 0.18rem solid rgba(255, 228, 105, 0.86);
   border-radius: 50%;
   background:
+    conic-gradient(#fff39b var(--fever-progress), rgba(255, 230, 120, 0.16) 0),
     radial-gradient(circle, rgba(255, 245, 179, 0.22), transparent 58%),
     rgba(8, 16, 24, 0.35);
   box-shadow:
@@ -369,8 +379,19 @@ body {
     inset 0 0 14px rgba(255, 255, 255, 0.25);
 }
 
+.fever-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0.28rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 245, 179, 0.22), transparent 58%),
+    rgba(8, 16, 24, 0.78);
+}
+
 .fever-ring span {
   position: absolute;
+  z-index: 1;
   inset: 21% 34% 21% 32%;
   overflow: hidden;
   text-indent: -999px;
@@ -383,6 +404,42 @@ body {
   color: #f4fbff;
   font-size: clamp(1.05rem, 2vw, 1.6rem);
   line-height: 1;
+}
+
+.fever-panel.active {
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 14px rgba(255, 238, 112, 0.9));
+}
+
+.fever-panel.active .fever-ring {
+  animation: feverPulse 620ms ease-in-out infinite alternate;
+  border-color: rgba(255, 251, 191, 0.98);
+  box-shadow:
+    0 0 24px rgba(255, 230, 94, 0.78),
+    0 0 40px rgba(120, 244, 255, 0.34),
+    inset 0 0 18px rgba(255, 255, 255, 0.32);
+}
+
+.meter.ammo.fever-active {
+  border-color: rgba(255, 241, 130, 0.92);
+  box-shadow:
+    0 0 18px rgba(255, 226, 82, 0.58),
+    inset 0 0 12px rgba(255, 245, 163, 0.22);
+}
+
+.meter.ammo.fever-active i {
+  background: linear-gradient(90deg, #fff6a5, #73f7ff 55%, #ffffff);
+  box-shadow: 0 0 18px rgba(255, 238, 120, 0.88);
+}
+
+@keyframes feverPulse {
+  from {
+    transform: scale(0.97);
+  }
+
+  to {
+    transform: scale(1.04);
+  }
 }
 
 .pause-button {
