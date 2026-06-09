@@ -1,4 +1,5 @@
 node_modules/
 game-*.png
+*.bundle
 .playwright-browsers/
 .sync-backups/
