@@ -605,6 +605,7 @@ body {
   display: grid;
   place-items: center;
   min-width: 0;
+  container-type: size;
   border: 1px solid rgba(214, 245, 255, 0.62);
   border-radius: 1px;
   background:
@@ -631,6 +632,28 @@ body {
 .cell-label {
   position: relative;
   z-index: 1;
+  font-size: 42cqh;
+  line-height: 1;
+  text-align: center;
+}
+
+.cell.start .cell-label,
+.cell.boost .cell-label {
+  font-size: 56cqh;
+}
+
+.cell.core .cell-label {
+  font-size: 25cqh;
+}
+
+.cell.weapon .cell-label {
+  font-size: 78cqh;
+  transform: translateY(0.14em);
+}
+
+.cell.trap .cell-label,
+.cell.block .cell-label {
+  font-size: 36cqh;
 }
 
 .cell.start {
@@ -809,45 +832,45 @@ body {
   z-index: 1;
   left: 0;
   bottom: 0;
-  width: 36%;
-  height: 31%;
-  clip-path: polygon(0 0, 92% 4%, 100% 100%, 0 100%);
+  width: 50%;
+  height: 48%;
+  clip-path: polygon(0 0, 80% 0, 100% 100%, 0 100%);
 }
 
 .touch-zone-fire {
   z-index: 4;
-  left: 29%;
+  left: 30%;
   bottom: 0;
-  width: 35%;
-  height: 33%;
-  clip-path: polygon(16% 0, 84% 0, 100% 100%, 0 100%);
+  width: 40%;
+  height: 48%;
+  clip-path: polygon(0 0, 100% 0, 63% 100%, 37% 100%);
 }
 
 .touch-zone-right {
   z-index: 2;
-  right: 23%;
+  right: 0;
   bottom: 0;
-  width: 34%;
-  height: 31%;
-  clip-path: polygon(8% 4%, 100% 0, 100% 100%, 0 100%);
+  width: 50%;
+  height: 48%;
+  clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%);
 }
 
 .touch-zone-hack {
   z-index: 3;
   right: 0;
-  top: 44%;
-  width: 28%;
-  height: 40%;
-  clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 88%, 0 28%);
+  bottom: 12%;
+  width: 22%;
+  height: 20%;
+  clip-path: polygon(18% 0, 100% 0, 100% 100%, 0 100%, 0 28%);
 }
 
 .touch-zone-weapon {
   z-index: 5;
   left: 0;
-  top: 48%;
-  width: 30%;
-  height: 34%;
-  clip-path: polygon(0 0, 100% 12%, 86% 100%, 0 100%);
+  bottom: 8%;
+  width: 27%;
+  height: 16%;
+  clip-path: polygon(0 0, 100% 0, 92% 100%, 0 100%);
 }
 
 .mobile-touch-zone.pressed,
@@ -995,6 +1018,7 @@ button {
   min-width: min(620px, 74%);
   padding: 0.8rem 1.25rem;
   transform: translate(-50%, -50%);
+  pointer-events: none;
   border: 1px solid rgba(126, 233, 255, 0.88);
   border-radius: 6px;
   background: rgba(4, 15, 25, 0.68);

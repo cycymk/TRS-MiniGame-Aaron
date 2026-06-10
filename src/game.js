@@ -72,6 +72,10 @@ const hazards = Array.from({ length: 18 }, (_, index) => ({
 const shots = [];
 const blasts = [];
 const shieldImpacts = [];
+const hackDrag = {
+  active: false,
+  pointerId: null,
+};
 
 const BOSS_MAX_HP = 180;
 const BOSS_MAX_SHIELD = 90;
@@ -601,6 +605,28 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   setToast("LAUNCH", 800);
 }
 
+function isMobileFullscreenCandidate() {
+  return (
+    navigator.maxTouchPoints > 0 ||
+    window.matchMedia?.("(hover: none), (pointer: coarse)")?.matches === true
+  );
+}
+
+function requestGameFullscreen() {
+  if (!isMobileFullscreenCandidate() || document.fullscreenElement) {
+    return;
+  }
+
+  const target = gameShell;
+  const request =
+    target.requestFullscreen ??
+    target.webkitRequestFullscreen ??
+    document.documentElement.requestFullscreen ??
+    document.documentElement.webkitRequestFullscreen;
+  const result = request?.call(target);
+  result?.catch?.(() => {});
+}
+
 function beginPlayerDestroyed(outcome, now = performance.now()) {
   game.mode = "playerDestroyed";
   game.hack = null;
@@ -852,11 +878,6 @@ function renderHackGrid() {
       if (game.hack.cursor.row === rowIndex && game.hack.cursor.col === colIndex) {
         cell.classList.add("cursor");
       }
-      cell.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        moveHackToCell(rowIndex, colIndex);
-      });
       hackGrid.append(cell);
     });
   });
@@ -913,6 +934,69 @@ function moveHackToCell(row, col) {
   if (direction) {
     moveHack(direction);
   }
+}
+
+function moveHackTowardCell(row, col) {
+  if (!game.hack || game.mode !== "hack") {
+    return;
+  }
+
+  let safety = game.hack.board.length * game.hack.board[0].length;
+  while (
+    safety > 0 &&
+    game.hack &&
+    game.hack.status === "running" &&
+    (game.hack.cursor.row !== row || game.hack.cursor.col !== col)
+  ) {
+    safety -= 1;
+    const before = `${game.hack.cursor.row},${game.hack.cursor.col}`;
+    const rowDelta = row - game.hack.cursor.row;
+    const colDelta = col - game.hack.cursor.col;
+    const horizontal = colDelta < 0 ? "left" : colDelta > 0 ? "right" : null;
+    const vertical = rowDelta < 0 ? "up" : rowDelta > 0 ? "down" : null;
+    const directions =
+      Math.abs(colDelta) >= Math.abs(rowDelta)
+        ? [horizontal, vertical]
+        : [vertical, horizontal];
+
+    let moved = false;
+    for (const direction of directions) {
+      if (!direction || !game.hack || game.hack.status !== "running") {
+        continue;
+      }
+      moveHack(direction);
+      const after = game.hack ? `${game.hack.cursor.row},${game.hack.cursor.col}` : before;
+      if (after !== before) {
+        moved = true;
+        break;
+      }
+    }
+
+    if (!moved) {
+      break;
+    }
+  }
+}
+
+function getHackCellFromPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  const cell = element?.closest?.(".cell");
+  if (!cell || !hackGrid.contains(cell)) {
+    return null;
+  }
+
+  return {
+    row: Number(cell.dataset.row),
+    col: Number(cell.dataset.col),
+  };
+}
+
+function moveHackAtPoint(clientX, clientY) {
+  const cell = getHackCellFromPoint(clientX, clientY);
+  if (!cell) {
+    return;
+  }
+  moveHackTowardCell(cell.row, cell.col);
 }
 
 function moveFlight(direction) {
@@ -2195,6 +2279,58 @@ function drawBulletTimeOverlay(width, height) {
   ctx.fillRect(0, 0, width, height);
 }
 
+function capturePointer(element, event) {
+  try {
+    element.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Synthetic pointer events used by tests may not have an active browser pointer.
+  }
+}
+
+function releasePointer(element, event) {
+  try {
+    element.releasePointerCapture?.(event.pointerId);
+  } catch {
+    // Matching capture may be absent after synthetic or cancelled pointer flows.
+  }
+}
+
+function startHackDrag(event) {
+  if (!game.hack || game.mode !== "hack" || game.paused) {
+    return;
+  }
+  if (event.pointerType === "mouse" && event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  hackDrag.active = true;
+  hackDrag.pointerId = event.pointerId;
+  capturePointer(hackGrid, event);
+  moveHackAtPoint(event.clientX, event.clientY);
+}
+
+function updateHackDrag(event) {
+  if (!hackDrag.active || event.pointerId !== hackDrag.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  moveHackAtPoint(event.clientX, event.clientY);
+}
+
+function stopHackDrag(event) {
+  if (!hackDrag.active || event.pointerId !== hackDrag.pointerId) {
+    return;
+  }
+
+  hackDrag.active = false;
+  hackDrag.pointerId = null;
+  releasePointer(hackGrid, event);
+}
+
 function setupHoldControl(button, action) {
   let repeatId = null;
 
@@ -2221,7 +2357,7 @@ function setupHoldControl(button, action) {
       }
       return;
     }
-    button.setPointerCapture?.(event.pointerId);
+    capturePointer(button, event);
     button.classList.add("pressed");
     flashControl(button, 260);
     moveFlight(action);
@@ -2245,6 +2381,23 @@ setupHoldControl(moveRightButton, "moveRight");
 setupHoldControl(touchMoveLeftZone, "moveLeft");
 setupHoldControl(touchMoveRightZone, "moveRight");
 
+hackGrid.addEventListener("pointerdown", startHackDrag);
+hackGrid.addEventListener("pointermove", updateHackDrag);
+hackGrid.addEventListener("pointerup", stopHackDrag);
+hackGrid.addEventListener("pointercancel", stopHackDrag);
+hackGrid.addEventListener("lostpointercapture", stopHackDrag);
+
+let fireRepeatId = null;
+
+function stopFireRepeat() {
+  if (fireRepeatId !== null) {
+    window.clearInterval(fireRepeatId);
+    fireRepeatId = null;
+  }
+  fireButton.classList.remove("pressed");
+  touchFireZone.classList.remove("pressed");
+}
+
 function handleFirePointerDown(event) {
   event.preventDefault();
   event.stopPropagation();
@@ -2260,11 +2413,28 @@ function handleFirePointerDown(event) {
   }
   flashControl(fireButton);
   flashControl(touchFireZone);
+  capturePointer(event.currentTarget, event);
+  stopFireRepeat();
+  fireButton.classList.add("pressed");
+  touchFireZone.classList.add("pressed");
   fireWeapon();
+  fireRepeatId = window.setInterval(() => {
+    if (game.paused || game.mode !== "flight" || game.bossDefeated) {
+      stopFireRepeat();
+      return;
+    }
+    fireWeapon();
+  }, 90);
 }
 
 fireButton.addEventListener("pointerdown", handleFirePointerDown);
+fireButton.addEventListener("pointerup", stopFireRepeat);
+fireButton.addEventListener("pointercancel", stopFireRepeat);
+fireButton.addEventListener("lostpointercapture", stopFireRepeat);
 touchFireZone.addEventListener("pointerdown", handleFirePointerDown);
+touchFireZone.addEventListener("pointerup", stopFireRepeat);
+touchFireZone.addEventListener("pointercancel", stopFireRepeat);
+touchFireZone.addEventListener("lostpointercapture", stopFireRepeat);
 
 weaponButtons.forEach((button) => {
   button.addEventListener("pointerdown", (event) => {
@@ -2349,7 +2519,23 @@ startOverlay.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   if (game.mode === "title") {
+    requestGameFullscreen();
     startIntro();
+  }
+});
+
+gameShell.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  if (game.paused) {
+    return;
+  }
+  if (tryRestartAfterBossVictory()) {
+    return;
+  }
+  if (game.mode === "flight") {
+    flashControl(hackButton);
+    flashControl(touchHackZone);
+    enterHack();
   }
 });
 
