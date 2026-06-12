@@ -89,6 +89,7 @@ body {
 .boss-panel,
 .fever-panel,
 .timer-panel,
+.run-hud,
 .hack-panel,
 .control-strip,
 .hack-action-button,
@@ -118,7 +119,7 @@ body {
   display: none;
 }
 
-.start-overlay div {
+.start-overlay > div {
   display: grid;
   gap: clamp(0.6rem, 1.8vw, 1.2rem);
   animation: title-swipe 680ms cubic-bezier(0.2, 0.86, 0.24, 1) both;
@@ -141,6 +142,34 @@ body {
   font-weight: 900;
   letter-spacing: 0.04em;
   animation: tap-blink 860ms ease-in-out infinite alternate;
+}
+
+.title-mode-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.title-mode-button {
+  width: fit-content;
+  padding: 0.55rem 1.1rem;
+  border: 1px solid rgba(255, 224, 122, 0.78);
+  border-radius: 4px;
+  color: #fff4cb;
+  background:
+    linear-gradient(145deg, rgba(255, 218, 89, 0.24), rgba(54, 190, 255, 0.08)),
+    rgba(8, 18, 28, 0.72);
+  box-shadow:
+    0 0 18px rgba(255, 213, 86, 0.25),
+    inset 0 0 14px rgba(255, 244, 175, 0.14);
+  font-size: clamp(0.78rem, 1.5vw, 1.08rem);
+  font-weight: 950;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.title-mode-button:active {
+  transform: translateY(1px) scale(0.98);
 }
 
 .ship-panel {
@@ -505,6 +534,62 @@ body {
 
 .timer-panel span {
   margin-left: 0.8rem;
+}
+
+.run-hud {
+  left: 50%;
+  top: 13%;
+  display: flex;
+  align-items: center;
+  gap: clamp(0.5rem, 1.2vw, 0.95rem);
+  min-width: min(680px, 62%);
+  padding: 0.55rem 0.8rem;
+  transform: translateX(-50%);
+  border: 1px solid rgba(119, 239, 255, 0.58);
+  border-radius: 4px;
+  background: rgba(3, 13, 23, 0.54);
+  box-shadow:
+    0 0 22px rgba(64, 213, 255, 0.22),
+    inset 0 0 18px rgba(75, 224, 255, 0.1);
+}
+
+.run-hud.hidden {
+  display: none;
+}
+
+.run-hud div:first-child {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 10rem;
+}
+
+.run-hud b,
+.run-stat strong {
+  color: #f4fdff;
+  font-weight: 950;
+}
+
+.run-hud b {
+  color: #9ff7ff;
+  font-size: clamp(0.72rem, 1.2vw, 0.95rem);
+}
+
+.run-hud span {
+  color: rgba(219, 246, 255, 0.75);
+  font-size: clamp(0.48rem, 0.82vw, 0.62rem);
+  font-weight: 850;
+}
+
+.run-stat {
+  display: grid;
+  min-width: 4rem;
+  gap: 0.08rem;
+  text-align: center;
+}
+
+.game-shell.run-active .boss-panel,
+.game-shell.run-active .fever-panel {
+  display: none;
 }
 
 .hack-panel {
@@ -1098,6 +1183,35 @@ button {
     0 0 16px rgba(74, 217, 255, 0.24);
   font-weight: 900;
   cursor: pointer;
+}
+
+.pause-mode-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid rgba(151, 235, 255, 0.2);
+}
+
+.pause-mode-button {
+  min-height: 2.8rem;
+  padding: 0.52rem 0.75rem;
+  border: 1px solid rgba(255, 224, 122, 0.74);
+  border-radius: 4px;
+  color: #fff7d6;
+  background:
+    linear-gradient(150deg, rgba(255, 218, 89, 0.2), rgba(54, 190, 255, 0.09)),
+    rgba(4, 15, 26, 0.68);
+  box-shadow:
+    inset 0 0 14px rgba(255, 244, 175, 0.12),
+    0 0 16px rgba(255, 213, 86, 0.2);
+  font-weight: 950;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.pause-mode-button:active {
+  transform: translateY(1px) scale(0.98);
 }
 
 .help-section {

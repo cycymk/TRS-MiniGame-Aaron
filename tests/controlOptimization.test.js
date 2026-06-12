@@ -176,7 +176,16 @@ test("holding the mobile fire zone keeps firing instead of sending one shot", as
     button: 0,
     buttons: 1,
   });
-  await page.waitForTimeout(560);
+  const ammoWidth = await page
+    .waitForFunction(
+      () => {
+        const width = parseFloat(document.querySelector("#ammoBar")?.style.width ?? "100");
+        return width < 96 ? width : false;
+      },
+      undefined,
+      { timeout: 2400 },
+    )
+    .then((handle) => handle.jsonValue());
   await page.dispatchEvent("#touchFireZone", "pointerup", {
     pointerId: 1,
     pointerType: "touch",
@@ -185,7 +194,6 @@ test("holding the mobile fire zone keeps firing instead of sending one shot", as
     buttons: 0,
   });
 
-  const ammoWidth = await page.locator("#ammoBar").evaluate((bar) => parseFloat(bar.style.width));
   assert.ok(ammoWidth < 96);
 });
 
@@ -235,8 +243,49 @@ test("right click opens the hacking minigame during flight", async (t) => {
   assert.equal(await page.locator("#timerPanel").isVisible(), true);
 });
 
-async function startGame(page) {
+test("tap to start enters chrono run by default and fire consumes run ammo", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
   await page.locator("#startOverlay").click();
+  await page.waitForSelector("#runHud:not(.hidden)");
+
+  assert.equal(await page.locator("#runObjective").textContent(), "CHRONO RUN");
+  const ammoBefore = Number(await page.locator("#runAmmoValue").textContent());
+  await page.locator("#fireButton").click();
+  await page.waitForFunction(
+    (before) => Number(document.querySelector("#runAmmoValue")?.textContent ?? "0") < before,
+    ammoBefore,
+  );
+  assert.equal(await page.locator("#bossBar").isVisible(), false);
+});
+
+test("chrono boss button starts the boss combat intro", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await page.locator("#chronoBossButton").click();
+  await page.locator("#startOverlay").waitFor({ state: "hidden" });
+
+  assert.equal(await page.locator("#runHud").isVisible(), false);
+  assert.equal(await page.locator("#bossBar").isVisible(), true);
+  await page.waitForTimeout(1500);
+  await page.locator("#spaceCanvas").click({ button: "right" });
+  await page.waitForSelector("#hackPanel:not(.hidden)");
+});
+
+async function startGame(page) {
+  await page.locator("#chronoBossButton").click();
   await page.locator("#startOverlay").waitFor({ state: "hidden" });
   await page.waitForTimeout(1500);
 }

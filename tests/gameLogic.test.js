@@ -9,6 +9,7 @@ import {
   createRandomHackBoard,
   mapFlightInput,
   mapHackInput,
+  shouldAdvancePromptFromKey,
   moveHackCursor,
   resolveHackBreakDuration,
   updateHackTimer,
@@ -228,6 +229,15 @@ test("flight controls support arrows and numpad keys", () => {
   assert.equal(mapFlightInput({ key: ".", code: "Period" }), "switchWeapon");
   assert.equal(mapFlightInput({ key: ".", code: "NumpadDecimal" }), "switchWeapon");
   assert.equal(mapFlightInput({ key: "+", code: "NumpadAdd" }), "hack");
+});
+
+test("prompt keyboard advance accepts gameplay keys but ignores escape and modifiers", () => {
+  assert.equal(shouldAdvancePromptFromKey({ key: "ArrowLeft", code: "ArrowLeft" }), true);
+  assert.equal(shouldAdvancePromptFromKey({ key: "0", code: "Numpad0" }), true);
+  assert.equal(shouldAdvancePromptFromKey({ key: "+", code: "NumpadAdd" }), true);
+  assert.equal(shouldAdvancePromptFromKey({ key: "a", code: "KeyA" }), true);
+  assert.equal(shouldAdvancePromptFromKey({ key: "Escape", code: "Escape" }), false);
+  assert.equal(shouldAdvancePromptFromKey({ key: "Shift", code: "ShiftLeft" }), false);
 });
 
 test("hack controls keep arrow-key grid movement", () => {

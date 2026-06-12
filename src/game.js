@@ -10,8 +10,16 @@ import {
   moveHackCursor,
   randomBoostMultiplier,
   resolveHackBreakDuration,
+  shouldAdvancePromptFromKey,
   updateHackTimer,
 } from "./gameLogic.js";
+import {
+  RUN_BASE_SPEED,
+  applyRunReward,
+  applyRunShot,
+  createRunState,
+  updateRunState,
+} from "./runLogic.js";
 
 const canvas = document.querySelector("#spaceCanvas");
 const ctx = canvas.getContext("2d");
@@ -28,8 +36,16 @@ const damageReadout = document.querySelector("#damageReadout");
 const feverPanel = document.querySelector("#feverPanel");
 const feverValue = document.querySelector("#feverValue");
 const startOverlay = document.querySelector("#startOverlay");
+const chronoRunButton = document.querySelector("#chronoRunButton");
+const chronoBossButton = document.querySelector("#chronoBossButton");
 const timerPanel = document.querySelector("#timerPanel");
 const timerValue = document.querySelector("#timerValue");
+const runHud = document.querySelector("#runHud");
+const runObjective = document.querySelector("#runObjective");
+const runStatusText = document.querySelector("#runStatusText");
+const runSpeedValue = document.querySelector("#runSpeedValue");
+const runDistanceValue = document.querySelector("#runDistanceValue");
+const runAmmoValue = document.querySelector("#runAmmoValue");
 const hackPanel = document.querySelector("#hackPanel");
 const hackGrid = document.querySelector("#hackGrid");
 const hackStatus = document.querySelector("#hackStatus");
@@ -54,6 +70,8 @@ const livesText = document.querySelector("#livesText");
 const pauseButton = document.querySelector("#pauseButton");
 const pauseOverlay = document.querySelector("#pauseOverlay");
 const resumeButton = document.querySelector("#resumeButton");
+const pauseRunButton = document.querySelector("#pauseRunButton");
+const pauseBossButton = document.querySelector("#pauseBossButton");
 const toast = document.querySelector("#toast");
 const gameShell = document.querySelector(".game-shell");
 
@@ -139,6 +157,13 @@ const bossTimings = {
   beam: 1600,
   cooldown: 4600,
 };
+const chronoRunStage = {
+  id: "chrono-run-v1",
+  objective: "distance",
+  targetDistance: 1200,
+  difficulty: 1,
+};
+const runRewardOrder = ["speedBoost", "screenBomb", "temporaryInvincible"];
 
 const game = {
   mode: "title",
@@ -153,6 +178,9 @@ const game = {
   bossHp: BOSS_MAX_HP,
   bossShieldHp: BOSS_MAX_SHIELD,
   hack: null,
+  hackReturnMode: null,
+  run: null,
+  runRewardIndex: 0,
   boostMultiplierPreview: 1,
   distanceLy: 0,
   travel: 0,
@@ -202,6 +230,7 @@ function enterHack(now = performance.now()) {
     return;
   }
 
+  game.hackReturnMode = "flight";
   game.mode = "hack";
   game.hack = createInitialHackState({
     board: createRandomHackBoard({ size: getHackBoardSize() }),
@@ -212,12 +241,32 @@ function enterHack(now = performance.now()) {
   setToast("BULLET TIME LINK OPEN", 900);
 }
 
+function enterRunMinigame(now = performance.now()) {
+  if (!game.run) {
+    return;
+  }
+
+  game.hackReturnMode = "chronoRun";
+  game.mode = "hack";
+  game.hack = createInitialHackState({
+    board: createRandomHackBoard({ size: HACK_MIN_BOARD_SIZE }),
+    now,
+  });
+  game.boostMultiplierPreview = 1;
+  renderHackGrid();
+  setToast("BULLET TIME / CHRONO CACHE", 1200);
+}
+
 function cancelHack() {
   if (game.mode !== "hack") {
     return;
   }
 
-  game.mode = "flight";
+  if (game.hackReturnMode === "chronoRun" && game.run) {
+    game.run = applyRunReward(game.run, null);
+  }
+  game.mode = game.hackReturnMode === "chronoRun" ? "chronoRun" : "flight";
+  game.hackReturnMode = null;
   game.hack = null;
   renderHackGrid();
   setToast("HACK CANCELLED", 650);
@@ -273,8 +322,54 @@ function fireWeapon(now = performance.now()) {
   maybeResetBoss();
 }
 
+function fireRunWeapon() {
+  if (game.mode !== "chronoRun" || !game.run) {
+    return;
+  }
+
+  const beforeScore = game.run.score;
+  const beforeEnemyCount = game.run.entities.filter((entity) => entity.kind === "enemy").length;
+  game.run = applyRunShot(game.run);
+  syncRunStateToGame();
+  shots.push({
+    born: performance.now(),
+    type: "machine",
+    damage: game.run.score > beforeScore ? game.run.score - beforeScore : 0,
+    lane: game.lane,
+    laneTarget: game.laneTarget,
+    laneVelocity: game.laneVelocity,
+    seed: Math.random() * Math.PI * 2,
+    shielded: false,
+  });
+  const afterEnemyCount = game.run.entities.filter((entity) => entity.kind === "enemy").length;
+  damageReadout.textContent = afterEnemyCount < beforeEnemyCount ? "RUN TARGET DOWN" : "RUN FIRE";
+}
+
 function resolveHack(status) {
   if (!game.hack) {
+    return;
+  }
+
+  if (game.hackReturnMode === "chronoRun") {
+    if (status === "success") {
+      const reward = getNextRunReward();
+      game.run = applyRunReward(game.run, reward);
+      game.runRewardIndex += 1;
+      game.speedPulse = reward === "speedBoost" ? 1 : game.speedPulse;
+      damageReadout.textContent = `CHRONO ${formatRunReward(reward)}`;
+      setToast(`MINIGAME CLEAR / ${formatRunReward(reward)}`, 1400);
+    } else {
+      if (game.run) {
+        game.run = applyRunReward(game.run, null);
+      }
+      damageReadout.textContent = "MINIGAME FAILED";
+      setToast("MINIGAME FAILED / RUN RESUMED", 1100);
+    }
+
+    game.mode = "chronoRun";
+    game.hack = null;
+    game.hackReturnMode = null;
+    renderHackGrid();
     return;
   }
 
@@ -330,7 +425,24 @@ function applyDamageToPlayer(damage, { readout = "HULL DAMAGE", toast: toastMess
 }
 
 function canDamagePlayer() {
-  return game.mode === "flight" || game.mode === "hack";
+  return game.mode === "flight" || game.mode === "hack" || game.mode === "chronoRun";
+}
+
+function getNextRunReward() {
+  return runRewardOrder[game.runRewardIndex % runRewardOrder.length];
+}
+
+function formatRunReward(reward) {
+  if (reward === "speedBoost") {
+    return "SPEED BOOST";
+  }
+  if (reward === "screenBomb") {
+    return "SCREEN BOMB";
+  }
+  if (reward === "temporaryInvincible") {
+    return "INVINCIBLE";
+  }
+  return "RUN RESUMED";
 }
 
 function getSuccessfulHackWeaponPickups(hackState) {
@@ -526,6 +638,9 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.bossHp = BOSS_MAX_HP;
   game.bossShieldHp = BOSS_MAX_SHIELD;
   game.hack = null;
+  game.hackReturnMode = null;
+  game.run = null;
+  game.runRewardIndex = 0;
   game.boostMultiplierPreview = 1;
   game.distanceLy = 0;
   game.travel = 0;
@@ -596,6 +711,8 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   game.laneTarget = 1;
   game.laneVelocity = 0;
   game.hack = null;
+  game.hackReturnMode = null;
+  game.run = null;
   game.paused = false;
   game.lastTime = now;
   hidePrompt();
@@ -603,6 +720,54 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   syncPauseUi();
   renderHackGrid();
   setToast("LAUNCH", 800);
+}
+
+function startChronoRun(now = performance.now()) {
+  game.mode = "chronoRun";
+  game.lane = 1;
+  game.laneTarget = 1;
+  game.laneVelocity = 0;
+  game.hp = PLAYER_MAX_HP;
+  game.ammo = 100;
+  game.hack = null;
+  game.hackReturnMode = null;
+  game.runRewardIndex = 0;
+  game.run = createRunState({
+    stage: chronoRunStage,
+    now,
+    entities: [
+      { id: "intro-fast", kind: "enemy", type: "fastShooter", lane: 1, z: 0.58, hp: 2 },
+      { id: "intro-heavy", kind: "enemy", type: "heavyRammer", lane: 0, z: 0.88, hp: 6 },
+      { id: "intro-cache", kind: "item", type: "minigameTrigger", lane: 2, z: 0.96 },
+    ],
+    spawnTimerMs: 1500,
+  });
+  game.distanceLy = 0;
+  game.travel = 0;
+  game.speedPulse = 0.7;
+  game.lastShotAt = now;
+  game.paused = false;
+  game.lastTime = now;
+  game.promptAction = null;
+  startOverlay.classList.add("hidden");
+  hidePrompt();
+  syncPauseUi();
+  renderHackGrid();
+  damageReadout.textContent = "CHRONO RUN";
+  setToast("CHRONO RUN / BREACH THE TIMELINE", 1200);
+}
+
+function restartChronoRun(now = performance.now()) {
+  resetGame(now, { startMode: "title" });
+  startChronoRun(now);
+}
+
+function restartChronoBoss(now = performance.now()) {
+  resetGame(now, { startMode: "intro" });
+}
+
+function returnToStartScreen(now = performance.now()) {
+  resetGame(now, { startMode: "title" });
 }
 
 function isMobileFullscreenCandidate() {
@@ -670,6 +835,22 @@ function hidePrompt() {
   restartOverlay.classList.add("hidden");
 }
 
+function activatePromptAction(now = performance.now()) {
+  if (game.promptAction === "continue") {
+    continuePlayer(now);
+    return true;
+  }
+  if (game.promptAction === "gameover") {
+    resetGame(now, { startMode: "title" });
+    return true;
+  }
+  if (game.promptAction === "bossRestart") {
+    resetGame(now, { startMode: "intro" });
+    return true;
+  }
+  return false;
+}
+
 function tryRestartAfterBossVictory() {
   if (!game.bossDefeated) {
     return false;
@@ -689,7 +870,7 @@ function resetHazards() {
 }
 
 function setPaused(paused, now = performance.now()) {
-  if ((game.bossDefeated || !isGameplayActive()) && paused) {
+  if ((game.bossDefeated || (!isGameplayActive() && game.mode !== "chronoRun")) && paused) {
     return;
   }
   if (game.paused === paused) {
@@ -1000,6 +1181,20 @@ function moveHackAtPoint(clientX, clientY) {
 }
 
 function moveFlight(direction) {
+  if (game.mode === "chronoRun" && game.run) {
+    const move = direction === "moveLeft" ? "left" : direction === "moveRight" ? "right" : null;
+    if (!move) {
+      return;
+    }
+    const previousLane = game.run.lane;
+    game.run = updateRunState(game.run, { move }, 0);
+    syncRunStateToGame();
+    if (game.run.lane !== previousLane) {
+      game.speedPulse = 1;
+    }
+    return;
+  }
+
   if (game.mode !== "flight") {
     return;
   }
@@ -1160,7 +1355,7 @@ function update(now) {
 
   const delta = Math.min(48, now - game.lastTime);
   game.lastTime = now;
-  const speed = game.mode === "hack" ? 0.35 : 1;
+  const speed = game.mode === "hack" ? 0.35 : game.mode === "chronoRun" && game.run ? game.run.speed : 1;
   if (isDistanceCountingMode()) {
     game.distanceLy += delta * 0.001 * DISTANCE_LY_PER_SECOND * speed;
   }
@@ -1180,6 +1375,15 @@ function update(now) {
       game.ammo = Math.min(100, game.ammo + delta * 0.012);
     }
     updateShipMovement(delta);
+  } else if (game.mode === "chronoRun" && game.run) {
+    game.run = updateRunState(game.run, {}, delta);
+    syncRunStateToGame();
+    updateShipMovement(delta);
+    if (game.run.status === "minigame") {
+      enterRunMinigame(now);
+    } else if (game.run.status === "failed") {
+      returnToStartScreen(now);
+    }
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
     const remaining = Math.max(0, game.hack.expiresAt - now);
@@ -1197,6 +1401,18 @@ function update(now) {
   draw(now);
   updateHud();
   requestAnimationFrame(update);
+}
+
+function syncRunStateToGame() {
+  if (!game.run) {
+    return;
+  }
+
+  game.laneTarget = game.run.lane;
+  game.hp = game.run.hp;
+  game.ammo = game.run.ammo;
+  game.distanceLy = game.run.distance;
+  game.speedPulse = Math.max(0, Math.min(1.2, game.run.speed - RUN_BASE_SPEED + 0.24));
 }
 
 function updateIntro(now, delta = 16) {
@@ -1222,13 +1438,7 @@ function updatePlayerDestroyed(now) {
     return;
   }
 
-  if (game.playerDeathOutcome === "continue") {
-    game.mode = "continue";
-    showPrompt("Continue", "TAP TO LAUNCH NEXT SHIP", "continue");
-  } else {
-    game.mode = "gameover";
-    showPrompt("任務失敗", "FINAL SHIP LOST / TAP TO RETRY", "gameover");
-  }
+  returnToStartScreen(now);
 }
 
 function updateBossVictory(now) {
@@ -1282,6 +1492,22 @@ function updateHud() {
   feverPanel.classList.toggle("active", feverActive);
   ammoBar.parentElement.classList.toggle("fever-active", feverActive);
   gameShell.classList.toggle("fever-active", feverActive);
+  gameShell.classList.toggle("run-active", game.mode === "chronoRun");
+  runHud.classList.toggle("hidden", game.mode !== "chronoRun");
+  if (game.run) {
+    runObjective.textContent = "CHRONO RUN";
+    runStatusText.textContent =
+      game.run.effects.invincibleMs > 0
+        ? "INVINCIBLE"
+        : game.run.effects.speedBoostMs > 0
+          ? "SPEED BOOST"
+          : game.run.pendingReward
+            ? "BULLET TIME CACHE"
+            : "DASH THROUGH TIME";
+    runSpeedValue.textContent = game.run.speed.toFixed(2);
+    runDistanceValue.textContent = Math.floor(game.run.distance).toString();
+    runAmmoValue.textContent = Math.floor(game.run.ammo).toString();
+  }
   const weapon = weaponConfigs[game.selectedWeapon];
   fireButton.querySelector("small").textContent = feverActive
     ? `FREE ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`
@@ -1313,7 +1539,10 @@ function draw(now) {
   drawSpace(width, height, now);
   drawWarpTunnel(width, height, now);
   drawFlightPath(width, height, now);
-  if (game.mode !== "title") {
+  if (game.mode === "chronoRun") {
+    drawRunEntities(width, height, now);
+  }
+  if (game.mode !== "title" && game.mode !== "chronoRun") {
     drawBoss(width, height, now);
   }
   drawShip(width, height, now);
@@ -1345,7 +1574,12 @@ function drawSpace(width, height, now) {
   ctx.strokeStyle = "rgba(170, 238, 255, 0.62)";
   ctx.fillStyle = "rgba(170, 238, 255, 0.92)";
   for (const star of stars) {
-    const starSpeed = game.mode === "hack" ? 0.004 : 0.019;
+    const starSpeed =
+      game.mode === "hack"
+        ? 0.004
+        : game.mode === "chronoRun" && game.run
+          ? 0.01 + game.run.speed * 0.013
+          : 0.019;
     star.z -= starSpeed * (0.55 + star.z);
     if (star.z <= 0.035) {
       star.x = Math.random() * 2 - 1;
@@ -1457,6 +1691,110 @@ function drawFlightPath(width, height, now) {
     ctx.fill();
     ctx.stroke();
   }
+}
+
+function drawRunEntities(width, height, now) {
+  if (!game.run) {
+    return;
+  }
+
+  const horizon = height * 0.42;
+  const center = width * 0.5;
+  const runSpeedGlow = Math.max(0, game.run.speed - RUN_BASE_SPEED);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  if (game.run.effects.speedBoostMs > 0) {
+    ctx.strokeStyle = `rgba(255, 217, 90, ${0.24 + runSpeedGlow * 0.16})`;
+    ctx.lineWidth = 3;
+    for (const offset of [-0.3, 0, 0.3]) {
+      ctx.beginPath();
+      ctx.moveTo(center + offset * width * 0.38, horizon);
+      ctx.lineTo(center + offset * width * 0.72, height * 1.05);
+      ctx.stroke();
+    }
+  }
+  if (game.run.effects.invincibleMs > 0) {
+    const pose = getShipPose(width, height);
+    ctx.strokeStyle = "rgba(255, 245, 146, 0.78)";
+    ctx.fillStyle = "rgba(255, 225, 89, 0.08)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.ellipse(pose.x, pose.y - height * 0.025, width * 0.09, height * 0.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  for (const entity of game.run.entities) {
+    const point = projectRunPoint(width, height, entity.lane, entity.z);
+    const scale = Math.max(0.25, 1.18 - entity.z);
+    const radius = Math.max(8, width * 0.018 * scale);
+
+    ctx.save();
+    ctx.translate(point.x, point.y);
+    ctx.globalCompositeOperation = "lighter";
+    if (entity.kind === "item") {
+      ctx.rotate(now * 0.004);
+      ctx.fillStyle = "rgba(255, 224, 89, 0.32)";
+      ctx.strokeStyle = "rgba(255, 245, 158, 0.92)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -radius * 1.35);
+      ctx.lineTo(radius * 1.15, 0);
+      ctx.lineTo(0, radius * 1.35);
+      ctx.lineTo(-radius * 1.15, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (entity.kind === "enemyBullet") {
+      ctx.fillStyle = "rgba(255, 82, 96, 0.82)";
+      ctx.shadowColor = "rgba(255, 42, 68, 0.9)";
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.62, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (entity.kind === "obstacle") {
+      ctx.fillStyle = "rgba(130, 160, 174, 0.25)";
+      ctx.strokeStyle = "rgba(202, 234, 244, 0.66)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-radius, -radius, radius * 2, radius * 2);
+    } else {
+      const heavy = entity.type === "heavyRammer";
+      const turret = entity.type === "turret";
+      ctx.fillStyle = heavy
+        ? "rgba(255, 98, 76, 0.24)"
+        : turret
+          ? "rgba(184, 102, 255, 0.24)"
+          : "rgba(255, 58, 88, 0.22)";
+      ctx.strokeStyle = heavy
+        ? "rgba(255, 150, 92, 0.86)"
+        : turret
+          ? "rgba(211, 158, 255, 0.86)"
+          : "rgba(255, 98, 128, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * (heavy ? 1.45 : 1), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(245, 253, 255, 0.88)";
+      ctx.font = `900 ${Math.max(8, radius * 0.72)}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(Math.ceil(entity.hp ?? 1)), 0, 0);
+    }
+    ctx.restore();
+  }
+}
+
+function projectRunPoint(width, height, lane, z) {
+  const horizon = height * 0.42;
+  const depth = Math.max(0, Math.min(1.2, 1.2 - z));
+  const laneOffset = getLaneOffset(lane);
+  return {
+    x: width * (0.5 + laneOffset * 0.52 * depth),
+    y: horizon + depth * depth * height * 0.5,
+  };
 }
 
 function drawBoss(width, height, now) {
@@ -2351,7 +2689,7 @@ function setupHoldControl(button, action) {
     if (tryRestartAfterBossVictory()) {
       return;
     }
-    if (game.mode !== "flight") {
+    if (!["flight", "chronoRun"].includes(game.mode)) {
       if (game.mode === "hack") {
         cancelHack();
       }
@@ -2417,13 +2755,21 @@ function handleFirePointerDown(event) {
   stopFireRepeat();
   fireButton.classList.add("pressed");
   touchFireZone.classList.add("pressed");
-  fireWeapon();
+  if (game.mode === "chronoRun") {
+    fireRunWeapon();
+  } else {
+    fireWeapon();
+  }
   fireRepeatId = window.setInterval(() => {
-    if (game.paused || game.mode !== "flight" || game.bossDefeated) {
+    if (game.paused || !["flight", "chronoRun"].includes(game.mode) || game.bossDefeated) {
       stopFireRepeat();
       return;
     }
-    fireWeapon();
+    if (game.mode === "chronoRun") {
+      fireRunWeapon();
+    } else {
+      fireWeapon();
+    }
   }, 90);
 }
 
@@ -2486,6 +2832,10 @@ function handleHackPointerDown(event) {
   }
   if (game.mode === "hack") {
     cancelHack();
+  } else if (game.mode === "chronoRun") {
+    flashControl(hackButton);
+    flashControl(touchHackZone);
+    enterRunMinigame();
   } else {
     flashControl(hackButton);
     flashControl(touchHackZone);
@@ -2515,12 +2865,33 @@ touchWeaponZone.addEventListener("pointerdown", (event) => {
   }
 });
 
-startOverlay.addEventListener("pointerdown", (event) => {
+chronoRunButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   if (game.mode === "title") {
     requestGameFullscreen();
-    startIntro();
+    startChronoRun();
+  }
+});
+
+chronoBossButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (game.mode === "title") {
+    requestGameFullscreen();
+    restartChronoBoss();
+  }
+});
+
+startOverlay.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (chronoRunButton.contains(event.target) || chronoBossButton.contains(event.target)) {
+    return;
+  }
+  if (game.mode === "title") {
+    requestGameFullscreen();
+    startChronoRun();
   }
 });
 
@@ -2549,6 +2920,18 @@ resumeButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   setPaused(false);
+});
+
+pauseRunButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  restartChronoRun();
+});
+
+pauseBossButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  restartChronoBoss();
 });
 
 pauseOverlay.addEventListener("pointerdown", (event) => {
@@ -2580,11 +2963,7 @@ document.addEventListener("pointerdown", (event) => {
 
 restartOverlay.addEventListener("pointerdown", (event) => {
   event.preventDefault();
-  if (game.promptAction === "continue") {
-    continuePlayer();
-  } else if (game.promptAction === "gameover" || game.promptAction === "bossRestart") {
-    resetGame(performance.now(), { startMode: "intro" });
-  }
+  activatePromptAction();
 });
 
 window.addEventListener("resize", resizeCanvas);
@@ -2596,6 +2975,12 @@ window.addEventListener("keydown", (event) => {
   }
   if (game.paused) {
     event.preventDefault();
+    return;
+  }
+
+  if (game.promptAction && shouldAdvancePromptFromKey(event)) {
+    event.preventDefault();
+    activatePromptAction();
     return;
   }
 
@@ -2629,11 +3014,19 @@ window.addEventListener("keydown", (event) => {
   } else if (flightAction === "moveRight") {
     moveFlight("moveRight");
   } else if (flightAction === "fire") {
-    fireWeapon();
+    if (game.mode === "chronoRun") {
+      fireRunWeapon();
+    } else {
+      fireWeapon();
+    }
   } else if (flightAction === "switchWeapon") {
     cycleWeapon();
   } else if (flightAction === "hack") {
-    enterHack();
+    if (game.mode === "chronoRun") {
+      enterRunMinigame();
+    } else {
+      enterHack();
+    }
   }
 });
 

@@ -21,6 +21,14 @@
         <div>
           <strong>==TRS Game==</strong>
           <span>TAP to Start</span>
+          <div class="title-mode-actions">
+            <button id="chronoRunButton" class="title-mode-button" type="button">
+              CHRONO RUN
+            </button>
+            <button id="chronoBossButton" class="title-mode-button" type="button">
+              CHRONO BOSS
+            </button>
+          </div>
         </div>
       </section>
 
@@ -64,6 +72,14 @@
               <li>切換武器：Delete 或小數點</li>
               <li>駭入：Ctrl 或數字鍵 +，路徑移動用方向鍵或 8 / 2 / 4 / 6</li>
             </ul>
+          </div>
+          <div class="pause-mode-actions" aria-label="restart mode">
+            <button id="pauseRunButton" class="pause-mode-button" type="button">
+              CHRONO RUN
+            </button>
+            <button id="pauseBossButton" class="pause-mode-button" type="button">
+              CHRONO BOSS
+            </button>
           </div>
         </div>
       </section>
@@ -113,6 +129,25 @@
 
       <section id="timerPanel" class="timer-panel hidden" aria-label="bullet time">
         BULLET TIME <span id="timerValue">05.0s</span>
+      </section>
+
+      <section id="runHud" class="run-hud hidden" aria-label="chrono run status">
+        <div>
+          <b id="runObjective">CHRONO RUN</b>
+          <span id="runStatusText">DASH THROUGH TIME</span>
+        </div>
+        <div class="run-stat">
+          <span>SPD</span>
+          <strong id="runSpeedValue">1.00</strong>
+        </div>
+        <div class="run-stat">
+          <span>DIST</span>
+          <strong id="runDistanceValue">0</strong>
+        </div>
+        <div class="run-stat">
+          <span>AMMO</span>
+          <strong id="runAmmoValue">100</strong>
+        </div>
       </section>
 
       <section id="hackPanel" class="hack-panel hidden" aria-label="hacking minigame">

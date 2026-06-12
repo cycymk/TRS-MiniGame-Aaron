@@ -68,8 +68,35 @@ test("pause modal freezes hack countdown until the game resumes", async (t) => {
   assert.notEqual(afterResume, pauseEnd);
 });
 
+test("pause modal can restart chrono run or chrono boss", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await startGame(page);
+
+  await page.locator("#pauseButton").click();
+  await page.locator("#pauseRunButton").click();
+  await page.waitForSelector("#runHud:not(.hidden)");
+  assert.equal(await page.locator("#pauseOverlay").isVisible(), false);
+  assert.equal(await page.locator("#bossBar").isVisible(), false);
+
+  await page.locator("#pauseButton").click();
+  await page.locator("#pauseBossButton").click();
+  await page.locator("#runHud").waitFor({ state: "hidden" });
+  assert.equal(await page.locator("#pauseOverlay").isVisible(), false);
+  assert.equal(await page.locator("#bossBar").isVisible(), true);
+  await page.waitForTimeout(1500);
+  await page.locator("#spaceCanvas").click({ button: "right" });
+  await page.waitForSelector("#hackPanel:not(.hidden)");
+});
+
 async function startGame(page) {
-  await page.locator("#startOverlay").click();
+  await page.locator("#chronoBossButton").click();
   await page.locator("#startOverlay").waitFor({ state: "hidden" });
   await page.waitForTimeout(1500);
 }

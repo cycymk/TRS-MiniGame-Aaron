@@ -276,6 +276,20 @@ export function mapHackInput(eventLike) {
   return null;
 }
 
+export function shouldAdvancePromptFromKey(eventLike) {
+  if (!eventLike || eventLike.repeat) {
+    return false;
+  }
+
+  const key = eventLike.key ?? "";
+  const ignoredKeys = new Set(["Escape", "Shift", "Meta", "CapsLock", "Tab"]);
+  if (ignoredKeys.has(key)) {
+    return false;
+  }
+
+  return key.length > 0;
+}
+
 function buildRoute(start, core, random) {
   const route = [{ ...start }];
   const current = { ...start };
