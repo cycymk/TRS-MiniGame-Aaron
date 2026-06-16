@@ -20,6 +20,7 @@ import {
   createRunState,
   updateRunState,
 } from "./runLogic.js";
+import { createNeonTunnel } from "./tunnelBackground.js";
 
 const canvas = document.querySelector("#spaceCanvas");
 const ctx = canvas.getContext("2d");
@@ -74,14 +75,9 @@ const pauseRunButton = document.querySelector("#pauseRunButton");
 const pauseBossButton = document.querySelector("#pauseBossButton");
 const toast = document.querySelector("#toast");
 const gameShell = document.querySelector(".game-shell");
+const neonTunnel = createNeonTunnel();
 
 const lanes = [-0.38, 0, 0.38];
-const stars = Array.from({ length: 150 }, () => ({
-  x: Math.random() * 2 - 1,
-  y: Math.random() * 2 - 1,
-  z: Math.random() * 0.95 + 0.05,
-}));
-const tunnelRibs = Array.from({ length: 15 }, (_, index) => index / 15);
 const hazards = Array.from({ length: 18 }, (_, index) => ({
   lane: index % 3,
   z: 0.12 + Math.random() * 0.9,
@@ -93,6 +89,14 @@ const shieldImpacts = [];
 const hackDrag = {
   active: false,
   pointerId: null,
+};
+const viewMotion = {
+  requested: false,
+  orientationEnabled: false,
+  x: 0,
+  y: 0,
+  targetX: 0,
+  targetY: 0,
 };
 
 const BOSS_MAX_HP = 180;
@@ -111,6 +115,9 @@ const SHIP_LANE_REST_THRESHOLD = 0.002;
 const SHIP_BANK_MAX_ROTATION = 0.17;
 const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
+const RUN_INTRO_DURATION_MS = 1150;
+const RUN_CRASH_SEQUENCE_MS = 1650;
+const RUN_HIT_FLASH_MS = 420;
 const HACK_MIN_BOARD_SIZE = 4;
 const HACK_MAX_BOARD_SIZE = 7;
 const DISTANCE_LY_PER_SECOND = 0.42;
@@ -209,6 +216,10 @@ const game = {
   victoryShownAt: 0,
   bossPose: { x: 0.5, y: 0.34 },
   introStartedAt: 0,
+  runIntroStartedAt: 0,
+  runCrashStartedAt: 0,
+  playerHitStartedAt: 0,
+  playerHitUntil: 0,
   playerDeathStartedAt: 0,
   playerDeathOutcome: null,
   promptAction: null,
@@ -668,6 +679,10 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.victoryShownAt = 0;
   game.bossPose = { x: 0.5, y: 0.34 };
   game.introStartedAt = startMode === "title" ? 0 : now;
+  game.runIntroStartedAt = 0;
+  game.runCrashStartedAt = 0;
+  game.playerHitStartedAt = 0;
+  game.playerHitUntil = 0;
   game.playerDeathStartedAt = 0;
   game.playerDeathOutcome = null;
   game.promptAction = null;
@@ -700,6 +715,10 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
 
   game.mode = "intro";
   game.introStartedAt = now;
+  game.runIntroStartedAt = 0;
+  game.runCrashStartedAt = 0;
+  game.playerHitStartedAt = 0;
+  game.playerHitUntil = 0;
   game.playerDeathStartedAt = 0;
   game.playerDeathOutcome = null;
   game.promptAction = null;
@@ -723,7 +742,7 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
 }
 
 function startChronoRun(now = performance.now()) {
-  game.mode = "chronoRun";
+  game.mode = "chronoRunIntro";
   game.lane = 1;
   game.laneTarget = 1;
   game.laneVelocity = 0;
@@ -740,11 +759,15 @@ function startChronoRun(now = performance.now()) {
       { id: "intro-heavy", kind: "enemy", type: "heavyRammer", lane: 0, z: 0.88, hp: 6 },
       { id: "intro-cache", kind: "item", type: "minigameTrigger", lane: 2, z: 0.96 },
     ],
-    spawnTimerMs: 1500,
+    spawnTimerMs: 1900,
   });
   game.distanceLy = 0;
   game.travel = 0;
   game.speedPulse = 0.7;
+  game.runIntroStartedAt = now;
+  game.runCrashStartedAt = 0;
+  game.playerHitStartedAt = 0;
+  game.playerHitUntil = 0;
   game.lastShotAt = now;
   game.paused = false;
   game.lastTime = now;
@@ -778,6 +801,8 @@ function isMobileFullscreenCandidate() {
 }
 
 function requestGameFullscreen() {
+  requestMotionPerspective();
+
   if (!isMobileFullscreenCandidate() || document.fullscreenElement) {
     return;
   }
@@ -792,6 +817,78 @@ function requestGameFullscreen() {
   result?.catch?.(() => {});
 }
 
+function requestMotionPerspective() {
+  if (viewMotion.requested) {
+    return;
+  }
+  viewMotion.requested = true;
+
+  const OrientationEvent = window.DeviceOrientationEvent;
+  if (!OrientationEvent) {
+    return;
+  }
+
+  if (typeof OrientationEvent.requestPermission === "function") {
+    OrientationEvent.requestPermission()
+      .then((permission) => {
+        if (permission === "granted") {
+          enableMotionPerspective();
+        }
+      })
+      .catch(() => {});
+    return;
+  }
+
+  enableMotionPerspective();
+}
+
+function enableMotionPerspective() {
+  if (viewMotion.orientationEnabled) {
+    return;
+  }
+
+  viewMotion.orientationEnabled = true;
+  window.addEventListener("deviceorientation", handleDeviceOrientation, { passive: true });
+}
+
+function handleDeviceOrientation(event) {
+  const sideTilt = clampNumber(event.gamma ?? 0, -28, 28) / 28;
+  const forwardTilt = clampNumber((event.beta ?? 50) - 50, -24, 24) / 24;
+  viewMotion.targetX = sideTilt;
+  viewMotion.targetY = forwardTilt;
+}
+
+function handlePointerPerspective(event) {
+  if (viewMotion.orientationEnabled || event.pointerType !== "mouse") {
+    return;
+  }
+
+  const rect = gameShell.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return;
+  }
+
+  const x = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
+  const y = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
+  viewMotion.targetX = clampNumber(x, -1, 1) * 0.42;
+  viewMotion.targetY = clampNumber(y, -1, 1) * 0.3;
+}
+
+function resetPointerPerspective(event) {
+  if (viewMotion.orientationEnabled || event.pointerType !== "mouse") {
+    return;
+  }
+
+  viewMotion.targetX = 0;
+  viewMotion.targetY = 0;
+}
+
+function updateViewMotion(delta) {
+  const blend = 1 - Math.pow(0.88, delta / 16.67);
+  viewMotion.x += (viewMotion.targetX - viewMotion.x) * blend;
+  viewMotion.y += (viewMotion.targetY - viewMotion.y) * blend;
+}
+
 function beginPlayerDestroyed(outcome, now = performance.now()) {
   game.mode = "playerDestroyed";
   game.hack = null;
@@ -804,6 +901,30 @@ function beginPlayerDestroyed(outcome, now = performance.now()) {
   renderHackGrid();
   damageReadout.textContent = outcome === "gameover" ? "SHIP LOST" : "SHIP DOWN";
   setToast(outcome === "gameover" ? "FINAL SHIP LOST" : "SHIP LOST", 1100);
+}
+
+function triggerPlayerHit(now = performance.now(), damage = 0) {
+  game.playerHitStartedAt = now;
+  game.playerHitUntil = now + RUN_HIT_FLASH_MS;
+  game.speedPulse = Math.max(game.speedPulse, 0.78);
+  damageReadout.textContent = damage > 0 ? `RED HIT -${Math.ceil(damage)}` : "RED HIT";
+  setToast("RED CONTACT DAMAGE", 700);
+}
+
+function beginRunCrash(now = performance.now()) {
+  if (game.mode === "runCrashed") {
+    return;
+  }
+
+  triggerPlayerHit(now, game.hp);
+  game.mode = "runCrashed";
+  game.runCrashStartedAt = now;
+  game.playerDeathStartedAt = now;
+  game.laneVelocity = 0;
+  game.speedPulse = 1.2;
+  shots.length = 0;
+  damageReadout.textContent = "CHRONO SHIP LOST";
+  setToast("SHIP CRITICAL", 900);
 }
 
 function continuePlayer(now = performance.now()) {
@@ -968,6 +1089,10 @@ function updateBoss(now, delta) {
 
 function isGameplayActive() {
   return game.mode === "flight" || game.mode === "hack";
+}
+
+function isRunVisualMode() {
+  return ["chronoRunIntro", "chronoRun", "runCrashed"].includes(game.mode);
 }
 
 function isDistanceCountingMode() {
@@ -1356,12 +1481,22 @@ function update(now) {
   const delta = Math.min(48, now - game.lastTime);
   game.lastTime = now;
   const speed = game.mode === "hack" ? 0.35 : game.mode === "chronoRun" && game.run ? game.run.speed : 1;
+  updateViewMotion(delta);
+  neonTunnel.update({
+    now,
+    delta,
+    speed: getTunnelVisualSpeed(speed, now),
+    boost: getTunnelBoost(now),
+    tilt: viewMotion,
+  });
   if (isDistanceCountingMode()) {
     game.distanceLy += delta * 0.001 * DISTANCE_LY_PER_SECOND * speed;
   }
   game.travel += delta * 0.0018 * speed;
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
   updateIntro(now, delta);
+  updateChronoRunIntro(now, delta);
+  updateRunCrash(now);
   updatePlayerDestroyed(now);
   updateBossVictory(now);
   updateBossBreak(now);
@@ -1375,14 +1510,21 @@ function update(now) {
       game.ammo = Math.min(100, game.ammo + delta * 0.012);
     }
     updateShipMovement(delta);
+  } else if (game.mode === "chronoRunIntro" && game.run) {
+    updateShipMovement(delta);
+    syncRunStateToGame();
   } else if (game.mode === "chronoRun" && game.run) {
+    const previousHp = game.run.hp;
     game.run = updateRunState(game.run, {}, delta);
+    if (game.run.hp < previousHp) {
+      triggerPlayerHit(now, previousHp - game.run.hp);
+    }
     syncRunStateToGame();
     updateShipMovement(delta);
     if (game.run.status === "minigame") {
       enterRunMinigame(now);
     } else if (game.run.status === "failed") {
-      returnToStartScreen(now);
+      beginRunCrash(now);
     }
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
@@ -1401,6 +1543,50 @@ function update(now) {
   draw(now);
   updateHud();
   requestAnimationFrame(update);
+}
+
+function getTunnelVisualSpeed(baseSpeed, now = performance.now()) {
+  if (game.mode === "title") {
+    return 0.58;
+  }
+  if (game.mode === "hack") {
+    return 0.24;
+  }
+  if (game.mode === "chronoRunIntro") {
+    return 0.88;
+  }
+  if (game.mode === "runCrashed") {
+    return 0.3;
+  }
+  if (game.mode === "intro") {
+    return 1.14;
+  }
+  if (game.mode === "bossDying" || game.mode === "victory" || game.mode === "victoryPrompt") {
+    return 0.72;
+  }
+
+  let speed = baseSpeed;
+  if (game.mode === "chronoRun" && game.run) {
+    speed = Math.max(speed, game.run.speed);
+  }
+  if (isFeverActive(now)) {
+    speed += 0.32;
+  }
+  if (game.bossMode === "beam") {
+    speed += 0.46;
+  }
+
+  return speed;
+}
+
+function getTunnelBoost(now = performance.now()) {
+  const runBoost = game.mode === "chronoRun" && game.run ? Math.max(0, game.run.speed - RUN_BASE_SPEED) : 0;
+  return (
+    game.speedPulse +
+    runBoost * 0.72 +
+    (isFeverActive(now) ? 0.56 : 0) +
+    (game.bossMode === "beam" ? 0.48 : 0)
+  );
 }
 
 function syncRunStateToGame() {
@@ -1426,6 +1612,31 @@ function updateIntro(now, delta = 16) {
     game.mode = "flight";
     game.bossModeStartedAt = now;
     damageReadout.textContent = "DAMAGE READY";
+  }
+}
+
+function updateChronoRunIntro(now, delta = 16) {
+  if (game.mode !== "chronoRunIntro" || !game.run) {
+    return;
+  }
+
+  updateShipMovement(delta);
+  const progress = Math.min(1, (now - game.runIntroStartedAt) / RUN_INTRO_DURATION_MS);
+  game.speedPulse = Math.max(game.speedPulse, 0.22 + progress * 0.46);
+  if (progress >= 1) {
+    game.mode = "chronoRun";
+    game.lastTime = now;
+    damageReadout.textContent = "CHRONO RUN";
+  }
+}
+
+function updateRunCrash(now) {
+  if (game.mode !== "runCrashed") {
+    return;
+  }
+
+  if (now - game.runCrashStartedAt >= RUN_CRASH_SEQUENCE_MS) {
+    returnToStartScreen(now);
   }
 }
 
@@ -1492,8 +1703,9 @@ function updateHud() {
   feverPanel.classList.toggle("active", feverActive);
   ammoBar.parentElement.classList.toggle("fever-active", feverActive);
   gameShell.classList.toggle("fever-active", feverActive);
-  gameShell.classList.toggle("run-active", game.mode === "chronoRun");
-  runHud.classList.toggle("hidden", game.mode !== "chronoRun");
+  const runModeActive = ["chronoRunIntro", "chronoRun", "runCrashed"].includes(game.mode);
+  gameShell.classList.toggle("run-active", runModeActive);
+  runHud.classList.toggle("hidden", game.mode !== "chronoRun" && game.mode !== "runCrashed");
   if (game.run) {
     runObjective.textContent = "CHRONO RUN";
     runStatusText.textContent =
@@ -1539,10 +1751,10 @@ function draw(now) {
   drawSpace(width, height, now);
   drawWarpTunnel(width, height, now);
   drawFlightPath(width, height, now);
-  if (game.mode === "chronoRun") {
+  if (isRunVisualMode()) {
     drawRunEntities(width, height, now);
   }
-  if (game.mode !== "title" && game.mode !== "chronoRun") {
+  if (game.mode !== "title" && !isRunVisualMode()) {
     drawBoss(width, height, now);
   }
   drawShip(width, height, now);
@@ -1555,86 +1767,43 @@ function draw(now) {
 }
 
 function drawSpace(width, height, now) {
-  const gradient = ctx.createRadialGradient(
-    width * 0.52,
-    height * 0.5,
-    width * 0.1,
-    width * 0.52,
-    height * 0.5,
-    width * 0.78,
-  );
-  gradient.addColorStop(0, "rgba(20, 82, 122, 0.02)");
-  gradient.addColorStop(0.62, "rgba(3, 12, 22, 0.04)");
-  gradient.addColorStop(1, "rgba(0, 0, 0, 0.2)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-
-  const centerX = width * 0.5;
-  const centerY = height * 0.42;
-  ctx.strokeStyle = "rgba(170, 238, 255, 0.62)";
-  ctx.fillStyle = "rgba(170, 238, 255, 0.92)";
-  for (const star of stars) {
-    const starSpeed =
-      game.mode === "hack"
-        ? 0.004
-        : game.mode === "chronoRun" && game.run
-          ? 0.01 + game.run.speed * 0.013
-          : 0.019;
-    star.z -= starSpeed * (0.55 + star.z);
-    if (star.z <= 0.035) {
-      star.x = Math.random() * 2 - 1;
-      star.y = Math.random() * 2 - 1;
-      star.z = 1;
-    }
-
-    const perspective = 1 / star.z;
-    const x = centerX + star.x * width * 0.08 * perspective;
-    const y = centerY + star.y * height * 0.08 * perspective;
-    const tailX = centerX + star.x * width * 0.08 * (perspective - 0.22);
-    const tailY = centerY + star.y * height * 0.08 * (perspective - 0.22);
-
-    if (x < -20 || x > width + 20 || y < -20 || y > height + 20) {
-      star.z = 0.034;
-      continue;
-    }
-
-    ctx.globalAlpha = Math.min(0.7, 0.08 + perspective * 0.09);
-    ctx.lineWidth = Math.min(2.8, 0.45 + perspective * 0.1);
-    ctx.beginPath();
-    ctx.moveTo(tailX, tailY);
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
+  neonTunnel.draw(ctx, width, height, now, {
+    boost: getTunnelBoost(now),
+    mode: game.mode,
+  });
 }
 
 function drawWarpTunnel(width, height, now) {
-  const center = width * 0.5 + Math.sin(now * 0.0009) * width * 0.018;
-  const horizon = height * 0.43;
-  const pulse = 1 + game.speedPulse * 0.35;
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const nearCenter = getNearPerspectiveCenter(width, height);
+  const horizon = vanishPoint.y + height * 0.08;
+  const pulse = 1 + game.speedPulse * 0.28;
+  const camera = neonTunnel.getCameraPose();
 
   ctx.save();
+  ctx.globalCompositeOperation = "lighter";
   ctx.strokeStyle = "rgba(96, 218, 255, 0.18)";
   ctx.lineWidth = 1.1;
 
-  for (const base of tunnelRibs) {
-    const t = (base + game.travel * 0.92) % 1;
-    const depth = t * t;
-    const y = horizon + depth * height * 0.62;
-    const half = (width * (0.05 + depth * 0.62)) * pulse;
-    const alpha = Math.min(0.5, 0.05 + depth * 0.42);
-    ctx.strokeStyle = `rgba(102, 222, 255, ${alpha * 0.58})`;
+  for (const lane of [-0.72, -0.46, -0.24, 0.24, 0.46, 0.72]) {
+    const nearX = nearCenter.x + lane * width * 0.78 * pulse;
+    const farX = vanishPoint.x + lane * width * 0.035;
+    ctx.strokeStyle = `rgba(102, 222, 255, ${0.07 + Math.abs(lane) * 0.06})`;
     ctx.beginPath();
-    ctx.moveTo(center - half, y);
-    ctx.lineTo(center + half, y);
+    ctx.moveTo(farX, horizon);
+    ctx.lineTo(nearX, height * 1.05);
     ctx.stroke();
   }
 
-  for (const angle of [-0.82, -0.52, -0.24, 0, 0.24, 0.52, 0.82]) {
-    ctx.strokeStyle = "rgba(102, 222, 255, 0.12)";
+  for (let index = 0; index < 7; index += 1) {
+    const depth = ((index / 7 + game.travel * 0.82) % 1) ** 1.7;
+    const y = horizon + depth * height * 0.62;
+    const half = width * (0.04 + depth * 0.66) * pulse;
+    const skew = Math.sin(camera.roll + depth * 2.4) * width * 0.025 * depth;
+    ctx.strokeStyle = `rgba(235, 76, 255, ${0.04 + depth * 0.15})`;
     ctx.beginPath();
-    ctx.moveTo(center, horizon);
-    ctx.lineTo(center + angle * width * 0.78, height * 1.04);
+    ctx.moveTo(nearCenter.x - half + skew, y);
+    ctx.lineTo(nearCenter.x + half + skew, y);
     ctx.stroke();
   }
 
@@ -1649,22 +1818,23 @@ function drawWarpTunnel(width, height, now) {
 }
 
 function drawFlightPath(width, height, now) {
-  const horizon = height * 0.44;
-  const center = width * 0.5;
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const nearCenter = getNearPerspectiveCenter(width, height);
+  const horizon = vanishPoint.y + height * 0.09;
   ctx.strokeStyle = "rgba(78, 217, 255, 0.23)";
   ctx.lineWidth = 1.4;
 
   for (const lane of [-0.42, 0, 0.42]) {
     ctx.beginPath();
-    ctx.moveTo(center + lane * width * 0.13, horizon);
-    ctx.lineTo(center + lane * width * 0.64, height * 1.02);
+    ctx.moveTo(vanishPoint.x + lane * width * 0.08, horizon);
+    ctx.lineTo(nearCenter.x + lane * width * 0.64, height * 1.02);
     ctx.stroke();
   }
 
   ctx.strokeStyle = "rgba(87, 224, 255, 0.28)";
   ctx.lineWidth = 2.2;
   ctx.beginPath();
-  ctx.arc(center, height * 0.75, width * 0.31, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.arc(nearCenter.x, height * 0.75, width * 0.31, Math.PI * 1.05, Math.PI * 1.95);
   ctx.stroke();
 
   if (game.bossDefeated || !isGameplayActive()) {
@@ -1677,9 +1847,12 @@ function drawFlightPath(width, height, now) {
       hazard.z = 0.12;
       hazard.lane = Math.floor(Math.random() * 3);
     }
-    const laneX = center + lanes[hazard.lane] * width * hazard.z;
+    const laneX =
+      vanishPoint.x +
+      (nearCenter.x - vanishPoint.x) * hazard.z +
+      lanes[hazard.lane] * width * hazard.z * 0.66;
     const wobble = Math.sin(now * 0.003 + hazard.phase) * width * 0.012 * hazard.z;
-    const y = horizon + hazard.z * height * 0.5;
+    const y = horizon + hazard.z * hazard.z * height * 0.5;
     const radius = 5 + hazard.z * 15;
     const pulse = Math.sin(now * 0.006 + hazard.phase) * 0.24 + 1;
 
@@ -1698,8 +1871,9 @@ function drawRunEntities(width, height, now) {
     return;
   }
 
-  const horizon = height * 0.42;
-  const center = width * 0.5;
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const nearCenter = getNearPerspectiveCenter(width, height);
+  const horizon = vanishPoint.y + height * 0.08;
   const runSpeedGlow = Math.max(0, game.run.speed - RUN_BASE_SPEED);
 
   ctx.save();
@@ -1709,8 +1883,8 @@ function drawRunEntities(width, height, now) {
     ctx.lineWidth = 3;
     for (const offset of [-0.3, 0, 0.3]) {
       ctx.beginPath();
-      ctx.moveTo(center + offset * width * 0.38, horizon);
-      ctx.lineTo(center + offset * width * 0.72, height * 1.05);
+      ctx.moveTo(vanishPoint.x + offset * width * 0.08, horizon);
+      ctx.lineTo(nearCenter.x + offset * width * 0.72, height * 1.05);
       ctx.stroke();
     }
   }
@@ -1730,71 +1904,309 @@ function drawRunEntities(width, height, now) {
     const point = projectRunPoint(width, height, entity.lane, entity.z);
     const scale = Math.max(0.25, 1.18 - entity.z);
     const radius = Math.max(8, width * 0.018 * scale);
+    const depthAlpha = Math.max(0.42, Math.min(1, scale));
 
     ctx.save();
     ctx.translate(point.x, point.y);
     ctx.globalCompositeOperation = "lighter";
     if (entity.kind === "item") {
-      ctx.rotate(now * 0.004);
-      ctx.fillStyle = "rgba(255, 224, 89, 0.32)";
-      ctx.strokeStyle = "rgba(255, 245, 158, 0.92)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, -radius * 1.35);
-      ctx.lineTo(radius * 1.15, 0);
-      ctx.lineTo(0, radius * 1.35);
-      ctx.lineTo(-radius * 1.15, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+      drawRunItemArtifact(radius, now, depthAlpha);
     } else if (entity.kind === "enemyBullet") {
-      ctx.fillStyle = "rgba(255, 82, 96, 0.82)";
-      ctx.shadowColor = "rgba(255, 42, 68, 0.9)";
-      ctx.shadowBlur = 18;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius * 0.62, 0, Math.PI * 2);
-      ctx.fill();
+      drawRunEnemyBullet(radius, now, depthAlpha);
     } else if (entity.kind === "obstacle") {
-      ctx.fillStyle = "rgba(130, 160, 174, 0.25)";
-      ctx.strokeStyle = "rgba(202, 234, 244, 0.66)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-radius, -radius, radius * 2, radius * 2);
+      drawRunObstacle(radius, now, depthAlpha);
     } else {
-      const heavy = entity.type === "heavyRammer";
-      const turret = entity.type === "turret";
-      ctx.fillStyle = heavy
-        ? "rgba(255, 98, 76, 0.24)"
-        : turret
-          ? "rgba(184, 102, 255, 0.24)"
-          : "rgba(255, 58, 88, 0.22)";
-      ctx.strokeStyle = heavy
-        ? "rgba(255, 150, 92, 0.86)"
-        : turret
-          ? "rgba(211, 158, 255, 0.86)"
-          : "rgba(255, 98, 128, 0.9)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius * (heavy ? 1.45 : 1), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = "rgba(245, 253, 255, 0.88)";
-      ctx.font = `900 ${Math.max(8, radius * 0.72)}px Arial, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(Math.ceil(entity.hp ?? 1)), 0, 0);
+      drawRunEnemyCraft(entity, radius, now, depthAlpha);
     }
     ctx.restore();
   }
 }
 
 function projectRunPoint(width, height, lane, z) {
-  const horizon = height * 0.42;
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const nearCenter = getNearPerspectiveCenter(width, height);
+  const horizon = vanishPoint.y + height * 0.08;
   const depth = Math.max(0, Math.min(1.2, 1.2 - z));
   const laneOffset = getLaneOffset(lane);
   return {
-    x: width * (0.5 + laneOffset * 0.52 * depth),
+    x: vanishPoint.x + (nearCenter.x - vanishPoint.x) * depth + laneOffset * width * 0.52 * depth,
     y: horizon + depth * depth * height * 0.5,
   };
+}
+
+function drawRunItemArtifact(radius, now, alpha) {
+  const pulse = 0.82 + Math.sin(now * 0.007) * 0.18;
+
+  ctx.save();
+  ctx.rotate(now * 0.0032);
+  ctx.shadowColor = `rgba(255, 223, 91, ${0.9 * alpha})`;
+  ctx.shadowBlur = radius * 1.9;
+  ctx.strokeStyle = `rgba(255, 236, 146, ${0.85 * alpha})`;
+  ctx.lineWidth = Math.max(1.4, radius * 0.11);
+  ctx.beginPath();
+  ctx.moveTo(0, -radius * 1.34);
+  ctx.lineTo(radius * 1.08, 0);
+  ctx.lineTo(0, radius * 1.34);
+  ctx.lineTo(-radius * 1.08, 0);
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.rotate(-now * 0.006);
+  ctx.strokeStyle = `rgba(94, 233, 255, ${0.62 * alpha})`;
+  ctx.lineWidth = Math.max(1.1, radius * 0.07);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 1.05, Math.PI * 0.1, Math.PI * 1.25);
+  ctx.stroke();
+  ctx.restore();
+
+  const gradient = ctx.createLinearGradient(-radius, -radius, radius, radius);
+  gradient.addColorStop(0, `rgba(28, 38, 56, ${0.74 * alpha})`);
+  gradient.addColorStop(0.45, `rgba(255, 212, 72, ${0.34 * alpha})`);
+  gradient.addColorStop(1, `rgba(16, 25, 42, ${0.82 * alpha})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(91, 236, 255, ${0.88 * alpha})`;
+  ctx.lineWidth = Math.max(1.5, radius * 0.12);
+  ctx.beginPath();
+  ctx.moveTo(0, -radius * 0.98);
+  ctx.lineTo(radius * 0.86, -radius * 0.1);
+  ctx.lineTo(radius * 0.35, radius * 0.92);
+  ctx.lineTo(-radius * 0.58, radius * 0.76);
+  ctx.lineTo(-radius * 0.78, -radius * 0.18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(111, 244, 255, ${0.52 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.46 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(246, 255, 255, ${0.88 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.2 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawRunEnemyBullet(radius, now, alpha) {
+  const pulse = 0.76 + Math.sin(now * 0.018) * 0.24;
+  drawRunDangerHalo(radius * 1.05, alpha, pulse);
+
+  ctx.save();
+  ctx.rotate(Math.PI * 0.25 + Math.sin(now * 0.01) * 0.08);
+  ctx.shadowColor = `rgba(255, 62, 55, ${0.9 * alpha})`;
+  ctx.shadowBlur = radius * 1.5;
+  ctx.fillStyle = `rgba(255, 64, 55, ${0.64 * alpha})`;
+  ctx.strokeStyle = `rgba(255, 210, 118, ${0.9 * alpha})`;
+  ctx.lineWidth = Math.max(1.2, radius * 0.1);
+  ctx.beginPath();
+  ctx.moveTo(0, -radius * 1.1);
+  ctx.lineTo(radius * 0.72, 0);
+  ctx.lineTo(0, radius * 1.1);
+  ctx.lineTo(-radius * 0.72, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(255, 246, 214, ${0.9 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawRunObstacle(radius, now, alpha) {
+  const pulse = 0.86 + Math.sin(now * 0.006) * 0.14;
+  drawRunDangerHalo(radius * 1.38, alpha, pulse);
+
+  const gradient = ctx.createLinearGradient(-radius, -radius * 1.25, radius, radius * 1.2);
+  gradient.addColorStop(0, `rgba(14, 22, 38, ${0.92 * alpha})`);
+  gradient.addColorStop(0.42, `rgba(47, 58, 78, ${0.78 * alpha})`);
+  gradient.addColorStop(1, `rgba(6, 12, 24, ${0.96 * alpha})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(255, 102, 78, ${0.9 * alpha})`;
+  ctx.shadowColor = `rgba(255, 68, 55, ${0.58 * alpha})`;
+  ctx.shadowBlur = radius * 1.2;
+  ctx.lineWidth = Math.max(1.8, radius * 0.1);
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.86, -radius * 1.04);
+  ctx.lineTo(radius * 0.74, -radius * 0.82);
+  ctx.lineTo(radius * 1.08, radius * 0.12);
+  ctx.lineTo(radius * 0.46, radius * 1.12);
+  ctx.lineTo(-radius * 0.48, radius * 1.0);
+  ctx.lineTo(-radius * 1.08, radius * 0.04);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(255, 174, 88, ${0.78 * alpha})`;
+  ctx.lineWidth = Math.max(1.2, radius * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.5, -radius * 0.52);
+  ctx.lineTo(0, -radius * 0.08);
+  ctx.lineTo(radius * 0.48, -radius * 0.52);
+  ctx.moveTo(-radius * 0.42, radius * 0.46);
+  ctx.lineTo(radius * 0.42, radius * 0.46);
+  ctx.stroke();
+}
+
+function drawRunEnemyCraft(entity, radius, now, alpha) {
+  const type = entity.type ?? "fastShooter";
+  const pulse = 0.86 + Math.sin(now * 0.008 + radius) * 0.14;
+  const dangerRadius = type === "heavyRammer" ? radius * 1.55 : radius * 1.22;
+  drawRunDangerHalo(dangerRadius, alpha, pulse);
+
+  if (type === "heavyRammer") {
+    drawHeavyRammer(radius, now, alpha);
+  } else if (type === "turret") {
+    drawTurretDrone(radius, now, alpha);
+  } else if (type === "weavingScout") {
+    drawWeavingScout(radius, now, alpha);
+  } else {
+    drawFastShooter(radius, now, alpha);
+  }
+}
+
+function drawHeavyRammer(radius, now, alpha) {
+  ctx.save();
+  ctx.rotate(Math.sin(now * 0.0024) * 0.12);
+  const gradient = ctx.createLinearGradient(-radius, -radius * 1.4, radius, radius * 1.3);
+  gradient.addColorStop(0, `rgba(15, 24, 42, ${0.94 * alpha})`);
+  gradient.addColorStop(0.5, `rgba(56, 68, 88, ${0.84 * alpha})`);
+  gradient.addColorStop(1, `rgba(7, 12, 24, ${0.96 * alpha})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(255, 108, 78, ${0.88 * alpha})`;
+  ctx.shadowColor = `rgba(255, 64, 55, ${0.58 * alpha})`;
+  ctx.shadowBlur = radius * 1.1;
+  ctx.lineWidth = Math.max(1.8, radius * 0.09);
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.74, -radius * 1.16);
+  ctx.lineTo(radius * 0.72, -radius * 1.02);
+  ctx.lineTo(radius * 1.1, radius * 0.24);
+  ctx.lineTo(radius * 0.2, radius * 1.24);
+  ctx.lineTo(-radius * 0.74, radius * 0.86);
+  ctx.lineTo(-radius * 1.02, -radius * 0.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  drawHostileCore(radius * 0.34, alpha, now);
+  drawPanelLines(radius, alpha, "rgba(255, 156, 93,");
+  ctx.restore();
+}
+
+function drawFastShooter(radius, now, alpha) {
+  ctx.save();
+  ctx.rotate(Math.sin(now * 0.004) * 0.08);
+  const gradient = ctx.createLinearGradient(0, -radius * 1.25, 0, radius * 1.2);
+  gradient.addColorStop(0, `rgba(24, 34, 58, ${0.9 * alpha})`);
+  gradient.addColorStop(0.48, `rgba(38, 50, 78, ${0.74 * alpha})`);
+  gradient.addColorStop(1, `rgba(7, 12, 25, ${0.96 * alpha})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(255, 86, 80, ${0.86 * alpha})`;
+  ctx.shadowColor = `rgba(255, 58, 62, ${0.48 * alpha})`;
+  ctx.shadowBlur = radius;
+  ctx.lineWidth = Math.max(1.5, radius * 0.09);
+  ctx.beginPath();
+  ctx.moveTo(0, -radius * 1.36);
+  ctx.lineTo(radius * 0.88, radius * 0.78);
+  ctx.lineTo(radius * 0.22, radius * 0.46);
+  ctx.lineTo(0, radius * 1.14);
+  ctx.lineTo(-radius * 0.22, radius * 0.46);
+  ctx.lineTo(-radius * 0.88, radius * 0.78);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  drawHostileCore(radius * 0.24, alpha, now);
+  drawPanelLines(radius * 0.86, alpha, "rgba(255, 144, 88,");
+  ctx.restore();
+}
+
+function drawWeavingScout(radius, now, alpha) {
+  ctx.save();
+  ctx.rotate(now * 0.0026);
+  ctx.strokeStyle = `rgba(255, 88, 86, ${0.9 * alpha})`;
+  ctx.fillStyle = `rgba(23, 31, 52, ${0.72 * alpha})`;
+  ctx.shadowColor = `rgba(255, 64, 74, ${0.5 * alpha})`;
+  ctx.shadowBlur = radius * 1.2;
+  ctx.lineWidth = Math.max(1.7, radius * 0.11);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 1.05, Math.PI * 0.12, Math.PI * 1.55);
+  ctx.arc(0, 0, radius * 0.56, Math.PI * 1.55, Math.PI * 0.12, true);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.rotate(-now * 0.006);
+  drawHostileCore(radius * 0.28, alpha, now);
+  ctx.restore();
+}
+
+function drawTurretDrone(radius, now, alpha) {
+  ctx.save();
+  ctx.rotate(now * 0.0022);
+  const gradient = ctx.createRadialGradient(-radius * 0.25, -radius * 0.3, 0, 0, 0, radius * 1.12);
+  gradient.addColorStop(0, `rgba(85, 102, 133, ${0.72 * alpha})`);
+  gradient.addColorStop(0.5, `rgba(24, 32, 54, ${0.9 * alpha})`);
+  gradient.addColorStop(1, `rgba(6, 9, 20, ${0.96 * alpha})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(255, 96, 82, ${0.86 * alpha})`;
+  ctx.shadowColor = `rgba(255, 68, 55, ${0.52 * alpha})`;
+  ctx.shadowBlur = radius;
+  ctx.lineWidth = Math.max(1.5, radius * 0.08);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 1.05, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.setLineDash([radius * 0.34, radius * 0.16]);
+  ctx.strokeStyle = `rgba(255, 167, 91, ${0.74 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.72, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawHostileCore(radius * 0.32, alpha, now);
+  ctx.restore();
+}
+
+function drawRunDangerHalo(radius, alpha, pulse = 1) {
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 64, 58, ${0.46 * alpha})`;
+  ctx.fillStyle = `rgba(255, 42, 48, ${0.055 * alpha})`;
+  ctx.shadowColor = `rgba(255, 44, 48, ${0.62 * alpha})`;
+  ctx.shadowBlur = radius * 0.85;
+  ctx.lineWidth = Math.max(1, radius * 0.035);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawHostileCore(radius, alpha, now) {
+  const pulse = 0.84 + Math.sin(now * 0.014) * 0.16;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = `rgba(255, 235, 210, ${0.92 * alpha})`;
+  ctx.shadowColor = `rgba(255, 62, 55, ${0.92 * alpha})`;
+  ctx.shadowBlur = radius * 3.2;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(255, 62, 55, ${0.76 * alpha})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 1.55 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPanelLines(radius, alpha, colorPrefix) {
+  ctx.save();
+  ctx.strokeStyle = `${colorPrefix} ${0.68 * alpha})`;
+  ctx.lineWidth = Math.max(1, radius * 0.052);
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.48, -radius * 0.42);
+  ctx.lineTo(0, -radius * 0.08);
+  ctx.lineTo(radius * 0.5, -radius * 0.42);
+  ctx.moveTo(-radius * 0.42, radius * 0.46);
+  ctx.lineTo(radius * 0.42, radius * 0.46);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawBoss(width, height, now) {
@@ -1888,9 +2300,10 @@ function drawActiveBossBeam(width, height, now) {
 }
 
 function getBossPose(width, height) {
+  const vanishPoint = getFlightVanishPoint(width, height);
   return {
-    x: width * game.bossPose.x,
-    y: height * game.bossPose.y,
+    x: vanishPoint.x + (game.bossPose.x - 0.5) * width * 0.85,
+    y: vanishPoint.y + (game.bossPose.y - 0.34) * height * 0.66,
   };
 }
 
@@ -2188,14 +2601,24 @@ function drawShip(width, height, now) {
   const shipWidth = Math.min(width * 0.22, 250);
   const shipHeight = shipWidth * 0.68;
   const deathProgress =
-    game.mode === "playerDestroyed" || game.mode === "continue"
+    game.mode === "playerDestroyed" || game.mode === "continue" || game.mode === "runCrashed"
       ? Math.min(1, (now - game.playerDeathStartedAt) / SHIP_DEATH_PROMPT_DELAY_MS)
+      : 0;
+  const hitProgress =
+    game.playerHitUntil > now ? 1 - (game.playerHitUntil - now) / RUN_HIT_FLASH_MS : 0;
+  const hitShake =
+    game.playerHitUntil > now
+      ? Math.sin(now * 0.19) * (1 - hitProgress) * Math.min(width, height) * 0.008
+      : 0;
+  const crashShake =
+    game.mode === "runCrashed"
+      ? Math.sin(now * 0.13) * (1 - Math.min(1, deathProgress)) * Math.min(width, height) * 0.015
       : 0;
   const flamePulse = 0.82 + Math.sin(now * 0.026) * 0.16 + Math.sin(now * 0.051) * 0.08;
   const boost = 1 + game.speedPulse * 0.45;
 
   ctx.save();
-  ctx.translate(shipX, shipY);
+  ctx.translate(shipX + hitShake + crashShake, shipY + Math.cos(now * 0.17) * hitShake * 0.45);
   ctx.rotate(pose.rotation + deathProgress * 0.32);
 
   if (deathProgress < 0.38) {
@@ -2204,10 +2627,24 @@ function drawShip(width, height, now) {
   }
 
   if (shipImage.complete && shipImage.naturalWidth > 0) {
+    const flash = game.playerHitUntil > now ? 0.36 + Math.sin(now * 0.08) * 0.18 : 0;
     ctx.globalAlpha = 0.97 * (1 - deathProgress * 0.82);
-    ctx.shadowColor = "rgba(61, 213, 255, 0.36)";
-    ctx.shadowBlur = 18;
+    ctx.shadowColor = flash > 0 ? "rgba(255, 82, 66, 0.88)" : "rgba(61, 213, 255, 0.36)";
+    ctx.shadowBlur = flash > 0 ? 28 : 18;
     ctx.drawImage(shipImage, -shipWidth / 2, -shipHeight * 0.58, shipWidth, shipHeight);
+    if (flash > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = flash;
+      ctx.fillStyle = "rgba(255, 246, 224, 0.78)";
+      ctx.beginPath();
+      ctx.ellipse(0, -shipHeight * 0.18, shipWidth * 0.48, shipHeight * 0.44, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 82, 66, 0.86)";
+      ctx.lineWidth = Math.max(2, shipWidth * 0.018);
+      ctx.stroke();
+      ctx.restore();
+    }
   } else {
     drawFallbackShip(now);
   }
@@ -2224,26 +2661,33 @@ function getShipPose(
   laneTarget = game.laneTarget,
   laneVelocity = game.laneVelocity,
 ) {
-  const x = width * (0.5 + getLaneOffset(lane) * 0.34);
-  const targetX = width * (0.5 + getLaneOffset(laneTarget) * 0.34);
+  const vanishPoint = getFlightVanishPoint(width, height);
+  const nearCenter = getNearPerspectiveCenter(width, height);
+  const x = nearCenter.x + getLaneOffset(lane) * width * 0.34;
+  const targetX = nearCenter.x + getLaneOffset(laneTarget) * width * 0.34;
   let y = height * 0.79;
 
-  if (game.mode === "intro") {
+  if (game.mode === "chronoRunIntro") {
+    const progress = easeOutCubic(
+      Math.min(1, (performance.now() - game.runIntroStartedAt) / RUN_INTRO_DURATION_MS),
+    );
+    y = height * (1.18 - 0.39 * progress);
+  } else if (game.mode === "intro") {
     const progress = easeOutCubic(
       Math.min(1, (performance.now() - game.introStartedAt) / SHIP_INTRO_DURATION_MS),
     );
     y = height * (1.22 - 0.43 * progress);
-  } else if (game.mode === "playerDestroyed" || game.mode === "continue") {
+  } else if (game.mode === "playerDestroyed" || game.mode === "continue" || game.mode === "runCrashed") {
     const progress = easeInCubic(
       Math.min(1, (performance.now() - game.playerDeathStartedAt) / SHIP_DEATH_PROMPT_DELAY_MS),
     );
     y = height * (0.79 + 0.42 * progress);
   }
 
-  const vanishPoint = getFlightVanishPoint(width, height);
   const aimRotation = Math.atan2(vanishPoint.x - x, y - vanishPoint.y);
   const bankInput = Math.max(-1, Math.min(1, laneVelocity * 0.86 + (laneTarget - lane) * 0.38));
-  const bankRotation = bankInput * SHIP_BANK_MAX_ROTATION;
+  const cameraRoll = neonTunnel.getCameraPose().roll * 0.22;
+  const bankRotation = bankInput * SHIP_BANK_MAX_ROTATION - cameraRoll;
 
   return {
     x,
@@ -2263,9 +2707,14 @@ function getLaneOffset(lanePosition) {
 }
 
 function getFlightVanishPoint(width, height) {
+  return neonTunnel.getVanishPoint(width, height);
+}
+
+function getNearPerspectiveCenter(width, height) {
+  const vanishPoint = getFlightVanishPoint(width, height);
   return {
-    x: width * 0.5,
-    y: height * 0.34,
+    x: width * 0.5 - (vanishPoint.x - width * 0.5) * 0.18,
+    y: height * 0.79,
   };
 }
 
@@ -2298,6 +2747,10 @@ function drawPlayerExplosion(shipWidth, now, progress) {
   ctx.restore();
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function easeOutCubic(value) {
   return 1 - Math.pow(1 - value, 3);
 }
@@ -2325,9 +2778,8 @@ function getShipMuzzle(width, height, shot = game) {
 function getForwardVanishPoint(width, height, shot = {}) {
   const muzzle = getShipMuzzle(width, height, shot);
   const vanishPoint = getFlightVanishPoint(width, height);
-  const towardCenter = (width * 0.5 - muzzle.x) * 0.36;
   return {
-    x: muzzle.x + towardCenter,
+    x: muzzle.x + (vanishPoint.x - muzzle.x) * 0.82,
     y: vanishPoint.y,
   };
 }
@@ -2909,6 +3361,8 @@ gameShell.addEventListener("contextmenu", (event) => {
     enterHack();
   }
 });
+gameShell.addEventListener("pointermove", handlePointerPerspective);
+gameShell.addEventListener("pointerleave", resetPointerPerspective);
 
 pauseButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();

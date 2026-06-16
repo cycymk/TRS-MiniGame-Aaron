@@ -33,15 +33,15 @@ test("colliding with an enemy damages the player and slows forward speed", () =>
         lane: 1,
         z: 0.04,
         hp: 6,
-        damage: 18,
       },
     ],
   });
 
   const next = updateRunState(state, {}, 16);
 
-  assert.equal(next.hp, 82);
+  assert.equal(next.hp, 90);
   assert.ok(next.speed < RUN_BASE_SPEED);
+  assert.ok(next.speed > 0.7);
   assert.equal(next.entities.length, 0);
 });
 

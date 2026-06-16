@@ -1,6 +1,6 @@
 export const RUN_LANE_COUNT = 3;
 export const RUN_BASE_SPEED = 1;
-export const RUN_MIN_SPEED = 0.42;
+export const RUN_MIN_SPEED = 0.72;
 export const RUN_MAX_SPEED = 1.9;
 export const RUN_SHOT_DAMAGE = 2;
 export const RUN_COLLISION_Z = 0.08;
@@ -15,30 +15,30 @@ const DEFAULT_STAGE = {
 const ENEMY_PRESETS = {
   heavyRammer: {
     hp: 6,
-    damage: 18,
-    approachSpeed: 0.42,
+    damage: 10,
+    approachSpeed: 0.34,
     score: 260,
   },
   fastShooter: {
     hp: 2,
-    damage: 10,
-    approachSpeed: 0.9,
+    damage: 6,
+    approachSpeed: 0.76,
     score: 120,
-    shootEveryMs: 850,
+    shootEveryMs: 1180,
   },
   weavingScout: {
     hp: 3,
-    damage: 12,
-    approachSpeed: 0.68,
+    damage: 7,
+    approachSpeed: 0.56,
     score: 170,
-    weaveEveryMs: 700,
+    weaveEveryMs: 980,
   },
   turret: {
     hp: 3,
-    damage: 12,
-    approachSpeed: 0.18,
+    damage: 7,
+    approachSpeed: 0.15,
     score: 190,
-    shootEveryMs: 650,
+    shootEveryMs: 980,
   },
 };
 
@@ -162,10 +162,10 @@ export function resolveRunCollision(state, entityId) {
   return {
     ...current,
     hp: Math.max(0, current.hp - damage),
-    speed: Math.max(RUN_MIN_SPEED, current.speed - 0.22),
+    speed: Math.max(RUN_MIN_SPEED, current.speed - 0.11),
     effects: {
       ...current.effects,
-      slowMs: Math.max(current.effects.slowMs, 1400),
+      slowMs: Math.max(current.effects.slowMs, 720),
     },
     entities,
     status: current.hp - damage <= 0 ? "failed" : current.status,
@@ -253,8 +253,8 @@ export function spawnRunEntity(state, random = Math.random) {
       type: "barrier",
       lane,
       z: 1.08,
-      damage: 14,
-      approachSpeed: 0.55,
+      damage: 8,
+      approachSpeed: 0.46,
     };
   }
 
@@ -315,8 +315,8 @@ function advanceRunEntities(state, deltaMs, random) {
         type: "bullet",
         lane: advanced.lane,
         z: Math.max(0, advanced.z - 0.08),
-        damage: 8,
-        approachSpeed: 1.2,
+        damage: 5,
+        approachSpeed: 0.94,
       });
     }
   }
@@ -363,7 +363,7 @@ function advanceRunEntities(state, deltaMs, random) {
     const spawned = spawnRunEntity(next, random);
     return {
       ...spawned,
-      spawnTimerMs: 640 + Math.floor(random() * 460),
+      spawnTimerMs: 820 + Math.floor(random() * 680),
     };
   }
 
