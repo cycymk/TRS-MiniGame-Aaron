@@ -15,6 +15,7 @@ import {
 } from "./gameLogic.js";
 import {
   RUN_BASE_SPEED,
+  RUN_ENEMY_TABLE,
   applyRunReward,
   applyRunShot,
   createRunState,
@@ -28,6 +29,8 @@ const shipImage = new Image();
 shipImage.src = new URL("../public/assets/ship-player.png", import.meta.url).href;
 const bossImage = new Image();
 bossImage.src = new URL("../public/assets/boss-mothership.png", import.meta.url).href;
+const enemyImage = new Image();
+enemyImage.src = new URL("../public/assets/Enemy_01_s.png", import.meta.url).href;
 const hpBar = document.querySelector("#hpBar");
 const ammoBar = document.querySelector("#ammoBar");
 const distanceReadout = document.querySelector("#distanceReadout");
@@ -86,6 +89,7 @@ const hazards = Array.from({ length: 18 }, (_, index) => ({
 const shots = [];
 const blasts = [];
 const shieldImpacts = [];
+const runVisualEffects = [];
 const hackDrag = {
   active: false,
   pointerId: null,
@@ -117,6 +121,7 @@ const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
 const RUN_INTRO_DURATION_MS = 1150;
 const RUN_CRASH_SEQUENCE_MS = 1650;
+const RUN_MOTHERSHIP_ENCOUNTER_MS = 1900;
 const RUN_HIT_FLASH_MS = 420;
 const HACK_MIN_BOARD_SIZE = 4;
 const HACK_MAX_BOARD_SIZE = 7;
@@ -172,6 +177,14 @@ const chronoRunStage = {
 };
 const runRewardOrder = ["speedBoost", "screenBomb", "temporaryInvincible"];
 
+function getRunTargetDistance() {
+  const override = Number(new URLSearchParams(window.location.search).get("runTargetDistance"));
+  if (Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  return chronoRunStage.targetDistance;
+}
+
 const game = {
   mode: "title",
   lane: 1,
@@ -218,6 +231,7 @@ const game = {
   introStartedAt: 0,
   runIntroStartedAt: 0,
   runCrashStartedAt: 0,
+  runEncounterStartedAt: 0,
   playerHitStartedAt: 0,
   playerHitUntil: 0,
   playerDeathStartedAt: 0,
@@ -341,6 +355,7 @@ function fireRunWeapon() {
   const beforeScore = game.run.score;
   const beforeEnemyCount = game.run.entities.filter((entity) => entity.kind === "enemy").length;
   game.run = applyRunShot(game.run);
+  consumeRunEvents(performance.now());
   syncRunStateToGame();
   shots.push({
     born: performance.now(),
@@ -630,6 +645,7 @@ function defeatBoss(now = performance.now()) {
   game.speedPulse = 1;
   shots.length = 0;
   shieldImpacts.length = 0;
+  runVisualEffects.length = 0;
   renderHackGrid();
   hidePrompt();
   damageReadout.textContent = "BOSS CRITICAL";
@@ -681,6 +697,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.introStartedAt = startMode === "title" ? 0 : now;
   game.runIntroStartedAt = 0;
   game.runCrashStartedAt = 0;
+  game.runEncounterStartedAt = 0;
   game.playerHitStartedAt = 0;
   game.playerHitUntil = 0;
   game.playerDeathStartedAt = 0;
@@ -693,6 +710,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   shots.length = 0;
   blasts.length = 0;
   shieldImpacts.length = 0;
+  runVisualEffects.length = 0;
   resetHazards();
   renderHackGrid();
   updateWeaponUi();
@@ -717,6 +735,7 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   game.introStartedAt = now;
   game.runIntroStartedAt = 0;
   game.runCrashStartedAt = 0;
+  game.runEncounterStartedAt = 0;
   game.playerHitStartedAt = 0;
   game.playerHitUntil = 0;
   game.playerDeathStartedAt = 0;
@@ -752,12 +771,15 @@ function startChronoRun(now = performance.now()) {
   game.hackReturnMode = null;
   game.runRewardIndex = 0;
   game.run = createRunState({
-    stage: chronoRunStage,
+    stage: {
+      ...chronoRunStage,
+      targetDistance: getRunTargetDistance(),
+    },
     now,
     entities: [
-      { id: "intro-fast", kind: "enemy", type: "fastShooter", lane: 1, z: 0.58, hp: 2 },
-      { id: "intro-heavy", kind: "enemy", type: "heavyRammer", lane: 0, z: 0.88, hp: 6 },
-      { id: "intro-cache", kind: "item", type: "minigameTrigger", lane: 2, z: 0.96 },
+      { id: "intro-fast", kind: "enemy", type: "enemyC", lane: 1, z: 0.58 },
+      { id: "intro-heavy", kind: "enemy", type: "enemyA", lane: 0, z: 0.88 },
+      { id: "intro-cache", kind: "item", type: "speedEnergy", lane: 2, z: 0.96 },
     ],
     spawnTimerMs: 1900,
   });
@@ -766,6 +788,7 @@ function startChronoRun(now = performance.now()) {
   game.speedPulse = 0.7;
   game.runIntroStartedAt = now;
   game.runCrashStartedAt = 0;
+  game.runEncounterStartedAt = 0;
   game.playerHitStartedAt = 0;
   game.playerHitUntil = 0;
   game.lastShotAt = now;
@@ -898,6 +921,7 @@ function beginPlayerDestroyed(outcome, now = performance.now()) {
   game.laneVelocity = 0;
   game.speedPulse = 1;
   shots.length = 0;
+  runVisualEffects.length = 0;
   renderHackGrid();
   damageReadout.textContent = outcome === "gameover" ? "SHIP LOST" : "SHIP DOWN";
   setToast(outcome === "gameover" ? "FINAL SHIP LOST" : "SHIP LOST", 1100);
@@ -907,8 +931,6 @@ function triggerPlayerHit(now = performance.now(), damage = 0) {
   game.playerHitStartedAt = now;
   game.playerHitUntil = now + RUN_HIT_FLASH_MS;
   game.speedPulse = Math.max(game.speedPulse, 0.78);
-  damageReadout.textContent = damage > 0 ? `RED HIT -${Math.ceil(damage)}` : "RED HIT";
-  setToast("RED CONTACT DAMAGE", 700);
 }
 
 function beginRunCrash(now = performance.now()) {
@@ -923,8 +945,31 @@ function beginRunCrash(now = performance.now()) {
   game.laneVelocity = 0;
   game.speedPulse = 1.2;
   shots.length = 0;
+  runVisualEffects.length = 0;
   damageReadout.textContent = "CHRONO SHIP LOST";
   setToast("SHIP CRITICAL", 900);
+}
+
+function beginRunMothershipEncounter(now = performance.now()) {
+  if (game.mode === "motherShipEncounter") {
+    return;
+  }
+
+  if (game.run) {
+    game.run = {
+      ...game.run,
+      entities: [],
+      status: "motherShipEncounter",
+    };
+  }
+  game.mode = "motherShipEncounter";
+  game.runEncounterStartedAt = now;
+  game.laneVelocity = 0;
+  game.speedPulse = 1.2;
+  shots.length = 0;
+  runVisualEffects.length = 0;
+  damageReadout.textContent = "MOTHERSHIP ENCOUNTER";
+  setToast("遭遇 MOTHERSHIP", 1700);
 }
 
 function continuePlayer(now = performance.now()) {
@@ -1092,7 +1137,7 @@ function isGameplayActive() {
 }
 
 function isRunVisualMode() {
-  return ["chronoRunIntro", "chronoRun", "runCrashed"].includes(game.mode);
+  return ["chronoRunIntro", "chronoRun", "runCrashed", "motherShipEncounter"].includes(game.mode);
 }
 
 function isDistanceCountingMode() {
@@ -1497,6 +1542,7 @@ function update(now) {
   updateIntro(now, delta);
   updateChronoRunIntro(now, delta);
   updateRunCrash(now);
+  updateRunMothershipEncounter(now);
   updatePlayerDestroyed(now);
   updateBossVictory(now);
   updateBossBreak(now);
@@ -1519,12 +1565,13 @@ function update(now) {
     if (game.run.hp < previousHp) {
       triggerPlayerHit(now, previousHp - game.run.hp);
     }
+    consumeRunEvents(now);
     syncRunStateToGame();
     updateShipMovement(delta);
-    if (game.run.status === "minigame") {
-      enterRunMinigame(now);
-    } else if (game.run.status === "failed") {
+    if (game.run.status === "failed") {
       beginRunCrash(now);
+    } else if (game.run.status === "motherShipEncounter") {
+      beginRunMothershipEncounter(now);
     }
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
@@ -1601,6 +1648,38 @@ function syncRunStateToGame() {
   game.speedPulse = Math.max(0, Math.min(1.2, game.run.speed - RUN_BASE_SPEED + 0.24));
 }
 
+function consumeRunEvents(now = performance.now()) {
+  if (!game.run?.events?.length) {
+    return;
+  }
+
+  for (const event of game.run.events) {
+    if (event.type === "buff") {
+      runVisualEffects.push({
+        type: "buff",
+        born: now,
+        lane: event.lane,
+        z: event.z,
+        rewardType: event.rewardType,
+      });
+    } else if (event.type === "enemyHit") {
+      runVisualEffects.push({
+        type: "enemyHit",
+        born: now,
+        lane: event.lane,
+        z: event.z,
+        enemyType: event.enemyType,
+        destroyed: event.destroyed,
+      });
+    }
+  }
+
+  game.run = {
+    ...game.run,
+    events: [],
+  };
+}
+
 function updateIntro(now, delta = 16) {
   if (game.mode !== "intro") {
     return;
@@ -1637,6 +1716,16 @@ function updateRunCrash(now) {
 
   if (now - game.runCrashStartedAt >= RUN_CRASH_SEQUENCE_MS) {
     returnToStartScreen(now);
+  }
+}
+
+function updateRunMothershipEncounter(now) {
+  if (game.mode !== "motherShipEncounter") {
+    return;
+  }
+
+  if (now - game.runEncounterStartedAt >= RUN_MOTHERSHIP_ENCOUNTER_MS) {
+    resetGame(now, { startMode: "intro" });
   }
 }
 
@@ -1703,13 +1792,18 @@ function updateHud() {
   feverPanel.classList.toggle("active", feverActive);
   ammoBar.parentElement.classList.toggle("fever-active", feverActive);
   gameShell.classList.toggle("fever-active", feverActive);
-  const runModeActive = ["chronoRunIntro", "chronoRun", "runCrashed"].includes(game.mode);
+  const runModeActive = ["chronoRunIntro", "chronoRun", "runCrashed", "motherShipEncounter"].includes(game.mode);
   gameShell.classList.toggle("run-active", runModeActive);
-  runHud.classList.toggle("hidden", game.mode !== "chronoRun" && game.mode !== "runCrashed");
+  runHud.classList.toggle(
+    "hidden",
+    !["chronoRun", "runCrashed", "motherShipEncounter"].includes(game.mode),
+  );
   if (game.run) {
     runObjective.textContent = "CHRONO RUN";
     runStatusText.textContent =
-      game.run.effects.invincibleMs > 0
+      game.mode === "motherShipEncounter"
+        ? "MOTHERSHIP ENCOUNTER"
+        : game.run.effects.invincibleMs > 0
         ? "INVINCIBLE"
         : game.run.effects.speedBoostMs > 0
           ? "SPEED BOOST"
@@ -1903,7 +1997,8 @@ function drawRunEntities(width, height, now) {
   for (const entity of game.run.entities) {
     const point = projectRunPoint(width, height, entity.lane, entity.z);
     const scale = Math.max(0.25, 1.18 - entity.z);
-    const radius = Math.max(8, width * 0.018 * scale);
+    const baseRadius = Math.max(8, width * 0.018 * scale);
+    const radius = entity.kind === "enemy" ? baseRadius * 2 * (entity.size ?? 1) : baseRadius;
     const depthAlpha = Math.max(0.42, Math.min(1, scale));
 
     ctx.save();
@@ -1920,6 +2015,80 @@ function drawRunEntities(width, height, now) {
     }
     ctx.restore();
   }
+
+  drawRunVisualEffects(width, height, now);
+}
+
+function drawRunVisualEffects(width, height, now) {
+  for (let index = runVisualEffects.length - 1; index >= 0; index -= 1) {
+    const effect = runVisualEffects[index];
+    const age = now - effect.born;
+    const lifetime = effect.type === "buff" ? 760 : effect.destroyed ? 420 : 300;
+    if (age > lifetime) {
+      runVisualEffects.splice(index, 1);
+      continue;
+    }
+
+    const progress = age / lifetime;
+    const alpha = 1 - progress;
+    if (effect.type === "buff") {
+      drawRunBuffEffect(width, height, effect, progress, alpha);
+    } else if (effect.type === "enemyHit") {
+      drawRunEnemyHitEffect(width, height, effect, progress, alpha);
+    }
+  }
+}
+
+function drawRunBuffEffect(width, height, effect, progress, alpha) {
+  const pose = getShipPose(width, height);
+  const radius = Math.min(width, height) * (0.08 + progress * 0.12);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = `rgba(255, 224, 87, ${0.75 * alpha})`;
+  ctx.fillStyle = `rgba(255, 212, 72, ${0.12 * alpha})`;
+  ctx.lineWidth = Math.max(2, width * 0.0035);
+  ctx.beginPath();
+  ctx.ellipse(pose.x, pose.y - height * 0.035, radius * 1.15, radius * 0.62, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(118, 246, 255, ${0.52 * alpha})`;
+  ctx.beginPath();
+  ctx.moveTo(pose.x - radius * 0.8, pose.y + radius * 0.15);
+  ctx.lineTo(pose.x, pose.y - radius * 0.72);
+  ctx.lineTo(pose.x + radius * 0.8, pose.y + radius * 0.15);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawRunEnemyHitEffect(width, height, effect, progress, alpha) {
+  const point = projectRunPoint(width, height, effect.lane, effect.z);
+  const scale = Math.max(0.25, 1.18 - effect.z);
+  const radius = Math.max(11, width * 0.034 * scale) * (effect.destroyed ? 1.45 : 1);
+  const visual = getRunEnemyVisualConfig(effect.enemyType);
+
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = visual.hitStroke(alpha);
+  ctx.fillStyle = `rgba(255, 246, 206, ${0.18 * alpha})`;
+  ctx.lineWidth = Math.max(2, radius * 0.12);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * (0.7 + progress * 1.15), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(255, 255, 255, ${0.86 * alpha})`;
+  ctx.lineWidth = Math.max(1.4, radius * 0.08);
+  for (let spoke = 0; spoke < 6; spoke += 1) {
+    const angle = (Math.PI * 2 * spoke) / 6 + progress * Math.PI * 0.45;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(angle) * radius * 0.2, Math.sin(angle) * radius * 0.2);
+    ctx.lineTo(Math.cos(angle) * radius * 1.15, Math.sin(angle) * radius * 1.15);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function projectRunPoint(width, height, lane, z) {
@@ -1935,55 +2104,44 @@ function projectRunPoint(width, height, lane, z) {
 }
 
 function drawRunItemArtifact(radius, now, alpha) {
-  const pulse = 0.82 + Math.sin(now * 0.007) * 0.18;
+  const pulse = 0.92 + Math.sin(now * 0.007) * 0.08;
+  const points = 6;
 
   ctx.save();
-  ctx.rotate(now * 0.0032);
+  ctx.scale(pulse, pulse);
   ctx.shadowColor = `rgba(255, 223, 91, ${0.9 * alpha})`;
-  ctx.shadowBlur = radius * 1.9;
-  ctx.strokeStyle = `rgba(255, 236, 146, ${0.85 * alpha})`;
-  ctx.lineWidth = Math.max(1.4, radius * 0.11);
-  ctx.beginPath();
-  ctx.moveTo(0, -radius * 1.34);
-  ctx.lineTo(radius * 1.08, 0);
-  ctx.lineTo(0, radius * 1.34);
-  ctx.lineTo(-radius * 1.08, 0);
-  ctx.closePath();
-  ctx.stroke();
-
-  ctx.rotate(-now * 0.006);
-  ctx.strokeStyle = `rgba(94, 233, 255, ${0.62 * alpha})`;
-  ctx.lineWidth = Math.max(1.1, radius * 0.07);
-  ctx.beginPath();
-  ctx.arc(0, 0, radius * 1.05, Math.PI * 0.1, Math.PI * 1.25);
-  ctx.stroke();
-  ctx.restore();
-
-  const gradient = ctx.createLinearGradient(-radius, -radius, radius, radius);
-  gradient.addColorStop(0, `rgba(28, 38, 56, ${0.74 * alpha})`);
-  gradient.addColorStop(0.45, `rgba(255, 212, 72, ${0.34 * alpha})`);
-  gradient.addColorStop(1, `rgba(16, 25, 42, ${0.82 * alpha})`);
+  ctx.shadowBlur = radius * 1.45;
+  const gradient = ctx.createLinearGradient(-radius, -radius * 0.8, radius, radius);
+  gradient.addColorStop(0, `rgba(255, 246, 139, ${0.95 * alpha})`);
+  gradient.addColorStop(0.62, `rgba(255, 202, 66, ${0.96 * alpha})`);
+  gradient.addColorStop(1, `rgba(180, 107, 8, ${0.92 * alpha})`);
   ctx.fillStyle = gradient;
-  ctx.strokeStyle = `rgba(91, 236, 255, ${0.88 * alpha})`;
-  ctx.lineWidth = Math.max(1.5, radius * 0.12);
+  ctx.strokeStyle = `rgba(255, 247, 172, ${0.9 * alpha})`;
+  ctx.lineWidth = Math.max(1.4, radius * 0.1);
   ctx.beginPath();
-  ctx.moveTo(0, -radius * 0.98);
-  ctx.lineTo(radius * 0.86, -radius * 0.1);
-  ctx.lineTo(radius * 0.35, radius * 0.92);
-  ctx.lineTo(-radius * 0.58, radius * 0.76);
-  ctx.lineTo(-radius * 0.78, -radius * 0.18);
+  for (let index = 0; index < points; index += 1) {
+    const angle = Math.PI / 6 + (Math.PI * 2 * index) / points;
+    const x = Math.cos(angle) * radius * 1.08;
+    const y = Math.sin(angle) * radius * 1.08;
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = `rgba(111, 244, 255, ${0.52 * alpha})`;
-  ctx.beginPath();
-  ctx.arc(0, 0, radius * 0.46 * pulse, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = `rgba(246, 255, 255, ${0.88 * alpha})`;
-  ctx.beginPath();
-  ctx.arc(0, 0, radius * 0.2 * pulse, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+  ctx.shadowBlur = radius * 0.22;
+  ctx.shadowOffsetY = radius * 0.08;
+  ctx.fillStyle = `rgba(27, 18, 0, ${0.95 * alpha})`;
+  ctx.font = `950 ${Math.max(13, radius * 1.45)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("S", 0, radius * 0.06);
+  ctx.restore();
 }
 
 function drawRunEnemyBullet(radius, now, alpha) {
@@ -2049,20 +2207,86 @@ function drawRunObstacle(radius, now, alpha) {
 }
 
 function drawRunEnemyCraft(entity, radius, now, alpha) {
-  const type = entity.type ?? "fastShooter";
+  const type = entity.type ?? "enemyB";
+  const visual = getRunEnemyVisualConfig(type);
   const pulse = 0.86 + Math.sin(now * 0.008 + radius) * 0.14;
-  const dangerRadius = type === "heavyRammer" ? radius * 1.55 : radius * 1.22;
-  drawRunDangerHalo(dangerRadius, alpha, pulse);
+  drawRunDangerHalo(radius * visual.dangerScale, alpha, pulse);
 
-  if (type === "heavyRammer") {
+  if (enemyImage.complete && enemyImage.naturalWidth > 0) {
+    drawEnemyImage(entity, radius, now, alpha, visual);
+    return;
+  }
+
+  if (type === "enemyA") {
     drawHeavyRammer(radius, now, alpha);
-  } else if (type === "turret") {
+  } else if (type === "enemyB") {
     drawTurretDrone(radius, now, alpha);
-  } else if (type === "weavingScout") {
-    drawWeavingScout(radius, now, alpha);
   } else {
     drawFastShooter(radius, now, alpha);
   }
+}
+
+function drawEnemyImage(entity, radius, now, alpha, visual) {
+  const imageWidth = radius * 2.45;
+  const imageHeight = imageWidth * (enemyImage.naturalHeight / enemyImage.naturalWidth);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.rotate(Math.sin(now * 0.0026) * 0.08);
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = visual.shadow(alpha);
+  ctx.shadowBlur = radius * 1.15;
+  ctx.filter = "brightness(1.42) saturate(1.45) contrast(1.12)";
+  ctx.drawImage(enemyImage, -imageWidth / 2, -imageHeight / 2, imageWidth, imageHeight);
+  ctx.filter = "none";
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = visual.stroke(alpha);
+  ctx.lineWidth = Math.max(2, radius * 0.08);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 1.32, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = visual.badgeFill(alpha);
+  ctx.strokeStyle = `rgba(255, 255, 255, ${0.72 * alpha})`;
+  ctx.lineWidth = Math.max(1, radius * 0.035);
+  ctx.beginPath();
+  ctx.arc(radius * 0.82, -radius * 0.82, radius * 0.34, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = `rgba(7, 11, 18, ${0.95 * alpha})`;
+  ctx.font = `950 ${Math.max(10, radius * 0.42)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(RUN_ENEMY_TABLE[entity.type]?.label ?? "B", radius * 0.82, -radius * 0.8);
+  ctx.restore();
+}
+
+function getRunEnemyVisualConfig(type = "enemyB") {
+  if (type === "enemyA") {
+    return {
+      dangerScale: 1.44,
+      stroke: (alpha) => `rgba(255, 107, 58, ${0.92 * alpha})`,
+      hitStroke: (alpha) => `rgba(255, 139, 76, ${0.96 * alpha})`,
+      shadow: (alpha) => `rgba(255, 74, 50, ${0.82 * alpha})`,
+      badgeFill: (alpha) => `rgba(255, 174, 67, ${0.94 * alpha})`,
+    };
+  }
+  if (type === "enemyC") {
+    return {
+      dangerScale: 1.08,
+      stroke: (alpha) => `rgba(255, 233, 81, ${0.9 * alpha})`,
+      hitStroke: (alpha) => `rgba(255, 238, 88, ${0.95 * alpha})`,
+      shadow: (alpha) => `rgba(255, 230, 88, ${0.72 * alpha})`,
+      badgeFill: (alpha) => `rgba(255, 235, 94, ${0.94 * alpha})`,
+    };
+  }
+  return {
+    dangerScale: 1.22,
+    stroke: (alpha) => `rgba(88, 226, 255, ${0.88 * alpha})`,
+    hitStroke: (alpha) => `rgba(110, 236, 255, ${0.96 * alpha})`,
+    shadow: (alpha) => `rgba(80, 219, 255, ${0.78 * alpha})`,
+    badgeFill: (alpha) => `rgba(95, 226, 255, ${0.94 * alpha})`,
+  };
 }
 
 function drawHeavyRammer(radius, now, alpha) {
@@ -3284,10 +3508,9 @@ function handleHackPointerDown(event) {
   }
   if (game.mode === "hack") {
     cancelHack();
-  } else if (game.mode === "chronoRun") {
+  } else if (game.mode === "chronoRun" || game.mode === "motherShipEncounter") {
     flashControl(hackButton);
     flashControl(touchHackZone);
-    enterRunMinigame();
   } else {
     flashControl(hackButton);
     flashControl(touchHackZone);
@@ -3476,8 +3699,8 @@ window.addEventListener("keydown", (event) => {
   } else if (flightAction === "switchWeapon") {
     cycleWeapon();
   } else if (flightAction === "hack") {
-    if (game.mode === "chronoRun") {
-      enterRunMinigame();
+    if (game.mode === "chronoRun" || game.mode === "motherShipEncounter") {
+      return;
     } else {
       enterHack();
     }

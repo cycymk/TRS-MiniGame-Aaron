@@ -140,18 +140,22 @@ test("weapon node label is centered and sized to fill most of its cell", async (
     const labelRect = cell.querySelector(".cell-label").getBoundingClientRect();
     return {
       heightRatio: labelRect.height / cellRect.height,
+      widthRatio: labelRect.width / cellRect.width,
       centerOffsetX: Math.abs(
         labelRect.left + labelRect.width / 2 - (cellRect.left + cellRect.width / 2),
       ) / cellRect.width,
       centerOffsetY: Math.abs(
         labelRect.top + labelRect.height / 2 - (cellRect.top + cellRect.height / 2),
       ) / cellRect.height,
+      overflowBottom: Math.max(0, labelRect.bottom - cellRect.bottom) / cellRect.height,
     };
   });
 
-  assert.ok(metrics.heightRatio >= 0.55 && metrics.heightRatio <= 0.82);
+  assert.ok(metrics.heightRatio >= 0.45 && metrics.heightRatio <= 0.68);
+  assert.ok(metrics.widthRatio <= 0.82);
   assert.ok(metrics.centerOffsetX < 0.03);
   assert.ok(metrics.centerOffsetY < 0.03);
+  assert.ok(metrics.overflowBottom === 0);
 });
 
 test("holding the mobile fire zone keeps firing instead of sending one shot", async (t) => {
@@ -263,6 +267,83 @@ test("tap to start enters chrono run by default and fire consumes run ammo", asy
     ammoBefore,
   );
   assert.equal(await page.locator("#bossBar").isVisible(), false);
+});
+
+test("chrono run hud stays above the hp and ammo meters", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await page.locator("#startOverlay").click();
+  await page.waitForSelector("#runHud:not(.hidden)");
+
+  const layout = await page.evaluate(() => {
+    const runHud = document.querySelector("#runHud").getBoundingClientRect();
+    const hpMeter = document.querySelector("#hpBar").closest(".meter-row").getBoundingClientRect();
+    const ammoMeter = document.querySelector("#ammoBar").closest(".meter-row").getBoundingClientRect();
+    return {
+      runBottom: runHud.bottom,
+      hpTop: hpMeter.top,
+      ammoTop: ammoMeter.top,
+      runLeft: runHud.left,
+      distanceRight: document.querySelector("#distanceReadout").getBoundingClientRect().right,
+    };
+  });
+
+  assert.ok(layout.runBottom < layout.hpTop - 4);
+  assert.ok(layout.runBottom < layout.ammoTop - 4);
+  assert.ok(layout.runLeft > layout.distanceRight + 8);
+});
+
+test("chrono run hack input does not open the hacking minigame", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await page.locator("#startOverlay").click();
+  await page.waitForSelector("#runHud:not(.hidden)");
+
+  await page.locator("#hackButton").click();
+  await page.waitForTimeout(350);
+
+  assert.equal(await page.locator("#hackPanel").isVisible(), false);
+  assert.equal(await page.locator("#timerPanel").isVisible(), false);
+});
+
+test("chrono run target distance triggers a mothership encounter before boss mode", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(`${url}?runTargetDistance=12`);
+  await page.locator("#startOverlay").click();
+  await page.waitForSelector("#runHud:not(.hidden)");
+
+  await page.waitForFunction(
+    () => document.querySelector("#damageReadout")?.textContent?.includes("MOTHERSHIP"),
+    undefined,
+    { timeout: 5000 },
+  );
+  assert.equal(await page.locator("#runHud").isVisible(), true);
+
+  await page.waitForFunction(
+    () => document.querySelector("#damageReadout")?.textContent === "DAMAGE READY",
+    undefined,
+    { timeout: 6000 },
+  );
+  assert.equal(await page.locator("#runHud").isVisible(), false);
+  assert.equal(await page.locator("#bossBar").isVisible(), true);
 });
 
 test("chrono boss button starts the boss combat intro", async (t) => {

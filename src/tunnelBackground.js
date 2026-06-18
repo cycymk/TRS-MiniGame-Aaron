@@ -77,7 +77,7 @@ function randomizeCameraTurn(state, now) {
   const direction = state.random() < 0.5 ? -1 : 1;
   state.camera.targetYaw = direction * (0.08 + state.random() * 0.17);
   state.camera.targetPitch = (state.random() - 0.5) * 0.13;
-  state.camera.targetRoll = direction * (0.07 + state.random() * 0.18);
+  state.camera.targetRoll = 0;
   state.nextTurnAt = now + 2200 + state.random() * 3600;
 }
 

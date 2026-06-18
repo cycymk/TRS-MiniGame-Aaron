@@ -3,42 +3,54 @@ export const RUN_BASE_SPEED = 1;
 export const RUN_MIN_SPEED = 0.72;
 export const RUN_MAX_SPEED = 1.9;
 export const RUN_SHOT_DAMAGE = 2;
-export const RUN_COLLISION_Z = 0.08;
+export const RUN_COLLISION_Z = 0.07;
+
+const DEFAULT_ENEMY_TUNING = {
+  hpMultiplier: 1,
+  approachSpeedMultiplier: 1,
+  shotFrequencyMultiplier: 1,
+  sizeMultiplier: 1,
+};
 
 const DEFAULT_STAGE = {
   id: "chrono-run-1",
   objective: "distance",
   targetDistance: 1200,
   difficulty: 1,
+  enemyTuning: DEFAULT_ENEMY_TUNING,
+  enemyOverrides: {},
 };
 
-const ENEMY_PRESETS = {
-  heavyRammer: {
+export const RUN_ENEMY_TABLE = {
+  enemyA: {
+    label: "A",
     hp: 6,
     damage: 10,
     approachSpeed: 0.34,
+    size: 1.5,
+    collisionScale: 1.18,
     score: 260,
+    shootEveryMs: 0,
   },
-  fastShooter: {
-    hp: 2,
-    damage: 6,
-    approachSpeed: 0.76,
-    score: 120,
-    shootEveryMs: 1180,
-  },
-  weavingScout: {
-    hp: 3,
+  enemyB: {
+    label: "B",
+    hp: 4,
     damage: 7,
     approachSpeed: 0.56,
+    size: 1,
+    collisionScale: 1,
     score: 170,
-    weaveEveryMs: 980,
+    shootEveryMs: 1200,
   },
-  turret: {
-    hp: 3,
-    damage: 7,
-    approachSpeed: 0.15,
-    score: 190,
-    shootEveryMs: 980,
+  enemyC: {
+    label: "C",
+    hp: 2,
+    damage: 6,
+    approachSpeed: 0.82,
+    size: 0.8,
+    collisionScale: 0.88,
+    score: 120,
+    shootEveryMs: 0,
   },
 };
 
@@ -54,13 +66,14 @@ export function createRunState({
   score = 0,
   entities = [],
   effects = {},
+  events = [],
   status = "running",
   pendingReward = null,
   nextEntityId = 1,
   spawnTimerMs = 100000,
 } = {}) {
   return normalizeState({
-    stage: { ...DEFAULT_STAGE, ...stage },
+    stage: normalizeStage(stage),
     startedAt: now,
     lane: clamp(Math.round(lane), 0, RUN_LANE_COUNT - 1),
     speed: clamp(speed, RUN_MIN_SPEED, RUN_MAX_SPEED),
@@ -68,8 +81,9 @@ export function createRunState({
     ammo: clamp(ammo, 0, 100),
     distance: Math.max(0, distance),
     score: Math.max(0, score),
-    entities: entities.map(normalizeEntity),
+    entities: entities.map((entity) => normalizeEntity(entity, normalizeStage(stage))),
     effects: normalizeEffects(effects),
+    events,
     status,
     pendingReward,
     nextEntityId,
@@ -79,7 +93,10 @@ export function createRunState({
 
 export function updateRunState(state, input = {}, deltaMs = 16, random = Math.random) {
   const safeDelta = Math.max(0, deltaMs);
-  let next = normalizeState(state);
+  let next = {
+    ...normalizeState(state),
+    events: [],
+  };
   if (next.status !== "running") {
     return next;
   }
@@ -98,10 +115,18 @@ export function updateRunState(state, input = {}, deltaMs = 16, random = Math.ra
   next = advanceRunEntities(next, safeDelta, random);
 
   const speedForDistance = next.status === "running" ? next.speed : 0;
+  const distance = next.distance + safeDelta * 0.001 * 24 * speedForDistance;
+  const reachedTarget =
+    next.status === "running" &&
+    next.stage.objective === "distance" &&
+    distance >= next.stage.targetDistance;
+
   return {
     ...next,
-    distance: next.distance + safeDelta * 0.001 * 24 * speedForDistance,
+    distance,
     score: Math.floor(next.score + safeDelta * 0.001 * 8 * speedForDistance),
+    entities: reachedTarget ? [] : next.entities,
+    status: reachedTarget ? "motherShipEncounter" : next.status,
   };
 }
 
@@ -123,15 +148,24 @@ export function applyRunShot(state) {
   }
 
   let defeatedScore = 0;
+  let hitEvent = null;
   const entities = current.entities.flatMap((entity) => {
     if (entity.id !== target.id) {
       return [entity];
     }
     const hp = entity.hp - RUN_SHOT_DAMAGE;
+    hitEvent = {
+      type: "enemyHit",
+      entityId: entity.id,
+      enemyType: entity.type,
+      lane: entity.lane,
+      z: entity.z,
+      destroyed: hp <= 0,
+    };
     if (hp > 0) {
       return [{ ...entity, hp }];
     }
-    defeatedScore += entity.score ?? ENEMY_PRESETS[entity.type]?.score ?? 100;
+    defeatedScore += entity.score ?? RUN_ENEMY_TABLE[entity.type]?.score ?? 100;
     return [];
   });
 
@@ -140,6 +174,7 @@ export function applyRunShot(state) {
     ammo: Math.max(0, current.ammo - 6),
     entities,
     score: current.score + defeatedScore,
+    events: hitEvent ? [...current.events, hitEvent] : current.events,
   };
 }
 
@@ -151,6 +186,23 @@ export function resolveRunCollision(state, entityId) {
   }
 
   const entities = current.entities.filter((candidate) => candidate.id !== entityId);
+  if (entity.kind === "item" && entity.type === "speedEnergy") {
+    const rewarded = applyRunReward(
+      {
+        ...current,
+        entities,
+      },
+      "speedBoost",
+    );
+    return {
+      ...rewarded,
+      events: [
+        ...current.events,
+        { type: "buff", rewardType: "speedBoost", lane: entity.lane, z: entity.z },
+      ],
+    };
+  }
+
   if (current.effects.invincibleMs > 0) {
     return {
       ...current,
@@ -229,19 +281,17 @@ export function spawnRunEntity(state, random = Math.random) {
   const id = `run-${current.nextEntityId}`;
   let entity;
 
-  if (roll < 0.22) {
-    entity = createEnemyEntity(id, "heavyRammer", lane);
-  } else if (roll < 0.44) {
-    entity = createEnemyEntity(id, "fastShooter", lane);
-  } else if (roll < 0.66) {
-    entity = createEnemyEntity(id, "weavingScout", lane);
+  if (roll < 0.28) {
+    entity = createEnemyEntity(id, "enemyA", lane, current.stage);
+  } else if (roll < 0.54) {
+    entity = createEnemyEntity(id, "enemyB", lane, current.stage);
   } else if (roll < 0.84) {
-    entity = createEnemyEntity(id, "turret", lane);
+    entity = createEnemyEntity(id, "enemyC", lane, current.stage);
   } else if (roll < 0.94) {
     entity = {
       id,
       kind: "item",
-      type: "minigameTrigger",
+      type: "speedEnergy",
       lane,
       z: 1.08,
       approachSpeed: 0.5,
@@ -307,7 +357,7 @@ function advanceRunEntities(state, deltaMs, random) {
   for (const entity of state.entities) {
     const advanced = advanceEntity(entity, state, deltaMs, random);
     advancedEntities.push(advanced);
-    if (advanced.kind === "enemy" && advanced.shootEveryMs && advanced.shotTimerMs <= 0) {
+    if (advanced.kind === "enemy" && advanced.shootEveryMs > 0 && advanced.shotTimerMs <= 0) {
       advanced.shotTimerMs = advanced.shootEveryMs;
       advancedEntities.push({
         id: `${advanced.id}-shot-${state.nextEntityId}-${Math.round(advanced.z * 1000)}`,
@@ -329,20 +379,10 @@ function advanceRunEntities(state, deltaMs, random) {
   for (const entity of [...next.entities]) {
     const collides =
       entity.lane === next.lane &&
-      entity.z <= RUN_COLLISION_Z &&
+      entity.z <= getRunCollisionZ(entity) &&
       ["enemy", "enemyBullet", "obstacle", "item"].includes(entity.kind);
 
     if (!collides) {
-      continue;
-    }
-
-    if (entity.kind === "item" && entity.type === "minigameTrigger") {
-      next = {
-        ...next,
-        status: "minigame",
-        pendingReward: "minigame",
-        entities: next.entities.filter((candidate) => candidate.id !== entity.id),
-      };
       continue;
     }
 
@@ -381,20 +421,7 @@ function advanceEntity(entity, state, deltaMs, random) {
     z: entity.z - approach,
   };
 
-  if (next.kind === "enemy" && next.type === "weavingScout") {
-    const weaveTimerMs = (next.weaveTimerMs ?? next.weaveEveryMs ?? 700) - deltaMs;
-    if (weaveTimerMs <= 0) {
-      next = {
-        ...next,
-        lane: clamp(next.lane + (random() < 0.5 ? -1 : 1), 0, RUN_LANE_COUNT - 1),
-        weaveTimerMs: next.weaveEveryMs ?? 700,
-      };
-    } else {
-      next.weaveTimerMs = weaveTimerMs;
-    }
-  }
-
-  if (next.kind === "enemy" && next.shootEveryMs) {
+  if (next.kind === "enemy" && next.shootEveryMs > 0) {
     next.shotTimerMs = (next.shotTimerMs ?? next.shootEveryMs) - deltaMs;
   }
 
@@ -402,18 +429,21 @@ function advanceEntity(entity, state, deltaMs, random) {
 }
 
 function normalizeState(state) {
+  const stage = normalizeStage(state.stage);
   return {
     ...state,
+    stage,
     lane: clamp(Math.round(state.lane ?? 1), 0, RUN_LANE_COUNT - 1),
     speed: clamp(state.speed ?? RUN_BASE_SPEED, RUN_MIN_SPEED, RUN_MAX_SPEED),
     hp: clamp(state.hp ?? 100, 0, 100),
     ammo: clamp(state.ammo ?? 100, 0, 100),
     distance: Math.max(0, state.distance ?? 0),
     score: Math.max(0, state.score ?? 0),
-    entities: (state.entities ?? []).map(normalizeEntity).flatMap((entity) => {
+    entities: (state.entities ?? []).map((entity) => normalizeEntity(entity, stage)).flatMap((entity) => {
       return [entity];
     }),
     effects: normalizeEffects(state.effects),
+    events: state.events ?? [],
     status: state.status ?? "running",
     pendingReward: state.pendingReward ?? null,
     nextEntityId: state.nextEntityId ?? 1,
@@ -421,14 +451,15 @@ function normalizeState(state) {
   };
 }
 
-function normalizeEntity(entity) {
+function normalizeEntity(entity, stage = DEFAULT_STAGE) {
   if (entity.kind === "enemy") {
-    const preset = ENEMY_PRESETS[entity.type] ?? ENEMY_PRESETS.fastShooter;
+    const preset = getEnemyConfig(entity.type, stage);
     return {
       ...preset,
       ...entity,
       z: entity.z ?? 1.08,
       hp: entity.hp ?? preset.hp,
+      shotTimerMs: entity.shotTimerMs ?? preset.shotTimerMs,
     };
   }
 
@@ -447,8 +478,8 @@ function normalizeEffects(effects = {}) {
   };
 }
 
-function createEnemyEntity(id, type, lane) {
-  const preset = ENEMY_PRESETS[type] ?? ENEMY_PRESETS.fastShooter;
+function createEnemyEntity(id, type, lane, stage = DEFAULT_STAGE) {
+  const preset = getEnemyConfig(type, stage);
   return {
     id,
     kind: "enemy",
@@ -458,11 +489,61 @@ function createEnemyEntity(id, type, lane) {
     hp: preset.hp,
     damage: preset.damage,
     approachSpeed: preset.approachSpeed,
+    size: preset.size,
+    collisionScale: preset.collisionScale,
     score: preset.score,
     shootEveryMs: preset.shootEveryMs,
     shotTimerMs: preset.shootEveryMs,
-    weaveEveryMs: preset.weaveEveryMs,
-    weaveTimerMs: preset.weaveEveryMs,
+  };
+}
+
+export function getRunCollisionZ(entity) {
+  if (entity.kind === "item") {
+    return RUN_COLLISION_Z * 1.42;
+  }
+  if (entity.kind === "enemy") {
+    return RUN_COLLISION_Z * (entity.collisionScale ?? entity.size ?? 1);
+  }
+  if (entity.kind === "enemyBullet") {
+    return RUN_COLLISION_Z * 0.78;
+  }
+  return RUN_COLLISION_Z;
+}
+
+function normalizeStage(stage = {}) {
+  return {
+    ...DEFAULT_STAGE,
+    ...stage,
+    enemyTuning: {
+      ...DEFAULT_ENEMY_TUNING,
+      ...(stage.enemyTuning ?? {}),
+    },
+    enemyOverrides: {
+      ...(stage.enemyOverrides ?? {}),
+    },
+  };
+}
+
+function getEnemyConfig(type = "enemyB", stage = DEFAULT_STAGE) {
+  const normalizedStage = normalizeStage(stage);
+  const tuning = normalizedStage.enemyTuning;
+  const base = {
+    ...RUN_ENEMY_TABLE.enemyB,
+    ...(RUN_ENEMY_TABLE[type] ?? RUN_ENEMY_TABLE.enemyB),
+    ...(normalizedStage.enemyOverrides[type] ?? {}),
+  };
+  const shotFrequencyMultiplier = Math.max(0.1, tuning.shotFrequencyMultiplier);
+  const shootEveryMs =
+    base.shootEveryMs > 0 ? Math.max(120, Math.round(base.shootEveryMs / shotFrequencyMultiplier)) : 0;
+
+  return {
+    ...base,
+    hp: Math.max(1, Math.ceil(base.hp * tuning.hpMultiplier)),
+    approachSpeed: roundTo(base.approachSpeed * tuning.approachSpeedMultiplier, 3),
+    size: roundTo(base.size * tuning.sizeMultiplier, 3),
+    collisionScale: roundTo((base.collisionScale ?? base.size) * tuning.sizeMultiplier, 3),
+    shootEveryMs,
+    shotTimerMs: shootEveryMs,
   };
 }
 
@@ -472,4 +553,9 @@ function randomLane(random) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function roundTo(value, precision) {
+  const multiplier = 10 ** precision;
+  return Math.round(value * multiplier) / multiplier;
 }
