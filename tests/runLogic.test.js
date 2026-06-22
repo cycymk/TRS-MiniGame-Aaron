@@ -205,7 +205,7 @@ test("speed boost temporarily increases speed then returns to base speed", () =>
   assert.equal(state.speed, RUN_BASE_SPEED);
 });
 
-test("speed energy items boost the run without opening a minigame", () => {
+test("speed energy items slow the run as a positive buff without opening a minigame", () => {
   const state = createRunState({
     lane: 1,
     entities: [{ id: "item", kind: "item", type: "speedEnergy", lane: 1, z: 0.04 }],
@@ -215,11 +215,11 @@ test("speed energy items boost the run without opening a minigame", () => {
 
   assert.equal(next.status, "running");
   assert.equal(next.pendingReward, null);
-  assert.equal(next.effects.speedBoostMs > 0, true);
-  assert.equal(next.speed > RUN_BASE_SPEED, true);
+  assert.equal(next.effects.slowMotionMs > 0, true);
+  assert.equal(next.speed < RUN_BASE_SPEED, true);
   assert.equal(next.entities.length, 0);
   assert.equal(next.events[0].type, "buff");
-  assert.equal(next.events[0].rewardType, "speedBoost");
+  assert.equal(next.events[0].rewardType, "slowMotion");
   assert.equal(next.events[0].lane, 1);
   assert.ok(next.events[0].z <= 0.04);
 });

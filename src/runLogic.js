@@ -192,13 +192,13 @@ export function resolveRunCollision(state, entityId) {
         ...current,
         entities,
       },
-      "speedBoost",
+      "slowMotion",
     );
     return {
       ...rewarded,
       events: [
         ...current.events,
-        { type: "buff", rewardType: "speedBoost", lane: entity.lane, z: entity.z },
+        { type: "buff", rewardType: "slowMotion", lane: entity.lane, z: entity.z },
       ],
     };
   }
@@ -234,6 +234,7 @@ export function applyRunReward(state, rewardType) {
       effects: {
         ...current.effects,
         speedBoostMs: 4200,
+        slowMotionMs: 0,
         slowMs: 0,
       },
       speed: RUN_MAX_SPEED,
@@ -252,6 +253,21 @@ export function applyRunReward(state, rewardType) {
         (entity) => entity.kind !== "enemy" && entity.kind !== "enemyBullet",
       ),
       score: current.score + cleared * 100,
+    };
+  }
+
+  if (rewardType === "slowMotion") {
+    return {
+      ...current,
+      status: "running",
+      pendingReward: null,
+      effects: {
+        ...current.effects,
+        speedBoostMs: 0,
+        slowMotionMs: 3600,
+        slowMs: 0,
+      },
+      speed: RUN_MIN_SPEED,
     };
   }
 
@@ -336,6 +352,7 @@ function tickEffects(state, deltaMs) {
     ...state,
     effects: {
       speedBoostMs: Math.max(0, state.effects.speedBoostMs - deltaMs),
+      slowMotionMs: Math.max(0, state.effects.slowMotionMs - deltaMs),
       invincibleMs: Math.max(0, state.effects.invincibleMs - deltaMs),
       slowMs: Math.max(0, state.effects.slowMs - deltaMs),
     },
@@ -345,6 +362,9 @@ function tickEffects(state, deltaMs) {
 function calculateSpeed(state) {
   if (state.effects.speedBoostMs > 0) {
     return RUN_MAX_SPEED;
+  }
+  if (state.effects.slowMotionMs > 0) {
+    return RUN_MIN_SPEED;
   }
   if (state.effects.slowMs > 0) {
     return RUN_MIN_SPEED;
@@ -473,6 +493,7 @@ function normalizeEntity(entity, stage = DEFAULT_STAGE) {
 function normalizeEffects(effects = {}) {
   return {
     speedBoostMs: Math.max(0, effects.speedBoostMs ?? 0),
+    slowMotionMs: Math.max(0, effects.slowMotionMs ?? 0),
     invincibleMs: Math.max(0, effects.invincibleMs ?? 0),
     slowMs: Math.max(0, effects.slowMs ?? 0),
   };

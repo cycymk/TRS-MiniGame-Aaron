@@ -252,6 +252,9 @@ export function mapFlightInput(eventLike) {
   if (key === "Control" || code === "NumpadAdd" || key === "+") {
     return "hack";
   }
+  if (key === "-" || code === "Minus" || code === "NumpadSubtract") {
+    return "pause";
+  }
 
   return null;
 }

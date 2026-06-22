@@ -229,6 +229,8 @@ test("flight controls support arrows and numpad keys", () => {
   assert.equal(mapFlightInput({ key: ".", code: "Period" }), "switchWeapon");
   assert.equal(mapFlightInput({ key: ".", code: "NumpadDecimal" }), "switchWeapon");
   assert.equal(mapFlightInput({ key: "+", code: "NumpadAdd" }), "hack");
+  assert.equal(mapFlightInput({ key: "-", code: "Minus" }), "pause");
+  assert.equal(mapFlightInput({ key: "-", code: "NumpadSubtract" }), "pause");
 });
 
 test("prompt keyboard advance accepts gameplay keys but ignores escape and modifiers", () => {

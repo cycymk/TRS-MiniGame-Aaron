@@ -972,6 +972,13 @@ body {
   filter: drop-shadow(0 0 18px rgba(255, 226, 92, 0.58));
 }
 
+.mobile-touch-zone.auto-fire {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 104, 79, 0.2), transparent 54%),
+    radial-gradient(circle at 50% 64%, rgba(255, 231, 93, 0.18), transparent 68%);
+  filter: drop-shadow(0 0 22px rgba(255, 125, 68, 0.62));
+}
+
 .reward-popup {
   position: absolute;
   z-index: 12;
@@ -1045,6 +1052,17 @@ button {
   box-shadow:
     inset 0 0 18px rgba(255, 221, 116, 0.22),
     0 0 22px rgba(255, 213, 86, 0.3);
+}
+
+.control-button.fire.auto-fire {
+  border-color: rgba(255, 102, 86, 0.95);
+  color: #fff1e6;
+  background:
+    linear-gradient(155deg, rgba(255, 118, 91, 0.28), rgba(255, 225, 96, 0.14)),
+    rgba(28, 8, 6, 0.72);
+  box-shadow:
+    inset 0 0 22px rgba(255, 114, 88, 0.3),
+    0 0 28px rgba(255, 91, 72, 0.48);
 }
 
 .control-button.fire span {

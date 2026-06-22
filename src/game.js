@@ -141,7 +141,7 @@ const weaponConfigs = {
     name: "MACHINE",
     short: "MG",
     ammoCost: 3,
-    cooldown: 90,
+    cooldown: 130,
     damage: 1,
     readout: "MACHINE HIT",
   },
@@ -169,6 +169,8 @@ const bossTimings = {
   beam: 1600,
   cooldown: 4600,
 };
+const FIRE_REPEAT_INTERVAL_MS = 150;
+const AUTO_FIRE_TOGGLE_HOLD_MS = 2000;
 const chronoRunStage = {
   id: "chrono-run-v1",
   objective: "distance",
@@ -208,6 +210,7 @@ const game = {
   messageUntil: 0,
   lastShotAt: 0,
   selectedWeapon: "machine",
+  autoFire: false,
   weaponUnlocks: {
     machine: true,
     spread: false,
@@ -462,6 +465,9 @@ function formatRunReward(reward) {
   if (reward === "speedBoost") {
     return "SPEED BOOST";
   }
+  if (reward === "slowMotion") {
+    return "TIME SLOW";
+  }
   if (reward === "screenBomb") {
     return "SCREEN BOMB";
   }
@@ -634,6 +640,7 @@ function defeatBoss(now = performance.now()) {
   }
 
   game.bossDefeated = true;
+  setAutoFire(false, { silent: true });
   game.bossDefeatedAt = now;
   game.victoryShownAt = 0;
   game.bossMode = "defeated";
@@ -674,6 +681,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.speedPulse = 0;
   game.lastShotAt = 0;
   game.selectedWeapon = "machine";
+  game.autoFire = false;
   game.weaponUnlocks = {
     machine: true,
     spread: false,
@@ -714,6 +722,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   resetHazards();
   renderHackGrid();
   updateWeaponUi();
+  syncAutoFireUi();
   syncPauseUi();
   hidePrompt();
   startOverlay.classList.toggle("hidden", startMode !== "title");
@@ -1044,6 +1053,7 @@ function setPaused(paused, now = performance.now()) {
   }
 
   if (paused) {
+    setAutoFire(false, { silent: true });
     game.paused = true;
     game.pausedAt = now;
     syncPauseUi();
@@ -1498,7 +1508,7 @@ function updateWeaponUi() {
   });
 
   const weapon = weaponConfigs[game.selectedWeapon];
-  fireButton.querySelector("small").textContent = `0 ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
+  fireButton.querySelector("small").textContent = `${game.autoFire ? "AUTO" : "0"} ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
 }
 
 function setToast(message, duration) {
@@ -1521,6 +1531,10 @@ function update(now) {
     game.lastTime = now;
     requestAnimationFrame(update);
     return;
+  }
+
+  if (game.autoFire && !canUseFireControls()) {
+    setAutoFire(false, { silent: true });
   }
 
   const delta = Math.min(48, now - game.lastTime);
@@ -1662,6 +1676,11 @@ function consumeRunEvents(now = performance.now()) {
         z: event.z,
         rewardType: event.rewardType,
       });
+      if (event.rewardType === "slowMotion") {
+        game.speedPulse = Math.max(game.speedPulse, 0.85);
+        damageReadout.textContent = "TIME SLOW";
+        setToast("YELLOW CACHE / TIME SLOW", 900);
+      }
     } else if (event.type === "enemyHit") {
       runVisualEffects.push({
         type: "enemyHit",
@@ -1807,6 +1826,8 @@ function updateHud() {
         ? "INVINCIBLE"
         : game.run.effects.speedBoostMs > 0
           ? "SPEED BOOST"
+          : game.run.effects.slowMotionMs > 0
+            ? "TIME SLOW"
           : game.run.pendingReward
             ? "BULLET TIME CACHE"
             : "DASH THROUGH TIME";
@@ -1817,7 +1838,7 @@ function updateHud() {
   const weapon = weaponConfigs[game.selectedWeapon];
   fireButton.querySelector("small").textContent = feverActive
     ? `FREE ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`
-    : `0 ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
+    : `${game.autoFire ? "AUTO" : "0"} ${weapon.short} Lv${game.weaponLevels[game.selectedWeapon]}`;
   livesText.textContent = `x ${game.lives}`;
   livesIcons.textContent = "";
   for (let index = 0; index < PLAYER_MAX_LIVES; index += 1) {
@@ -1992,6 +2013,19 @@ function drawRunEntities(width, height, now) {
     ctx.fill();
     ctx.stroke();
   }
+  if (game.run.effects.slowMotionMs > 0) {
+    const pulse = 0.5 + Math.sin(now * 0.012) * 0.5;
+    ctx.strokeStyle = `rgba(255, 232, 96, ${0.22 + pulse * 0.2})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([9, 12]);
+    for (const offset of [-0.22, 0.22]) {
+      ctx.beginPath();
+      ctx.moveTo(vanishPoint.x + offset * width * 0.05, horizon);
+      ctx.lineTo(nearCenter.x + offset * width * 0.58, height * 1.04);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
   ctx.restore();
 
   for (const entity of game.run.entities) {
@@ -2104,10 +2138,18 @@ function projectRunPoint(width, height, lane, z) {
 }
 
 function drawRunItemArtifact(radius, now, alpha) {
-  const pulse = 0.92 + Math.sin(now * 0.007) * 0.08;
+  const flash = 0.5 + Math.sin(now * 0.018) * 0.5;
+  const pulse = 0.9 + flash * 0.18;
   const points = 6;
 
   ctx.save();
+  ctx.globalAlpha = 0.76 + flash * 0.24;
+  ctx.strokeStyle = `rgba(255, 251, 170, ${0.38 * alpha + flash * 0.34 * alpha})`;
+  ctx.lineWidth = Math.max(1.2, radius * 0.08);
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * (1.6 + flash * 0.45), 0, Math.PI * 2);
+  ctx.stroke();
+
   ctx.scale(pulse, pulse);
   ctx.shadowColor = `rgba(255, 223, 91, ${0.9 * alpha})`;
   ctx.shadowBlur = radius * 1.45;
@@ -2137,10 +2179,10 @@ function drawRunItemArtifact(radius, now, alpha) {
   ctx.shadowBlur = radius * 0.22;
   ctx.shadowOffsetY = radius * 0.08;
   ctx.fillStyle = `rgba(27, 18, 0, ${0.95 * alpha})`;
-  ctx.font = `950 ${Math.max(13, radius * 1.45)}px "Segoe UI", sans-serif`;
+  ctx.font = `950 ${Math.max(11, radius * 0.82)}px "Segoe UI", sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("S", 0, radius * 0.06);
+  ctx.fillText("SLOW+", 0, radius * 0.06);
   ctx.restore();
 }
 
@@ -3402,14 +3444,125 @@ hackGrid.addEventListener("pointercancel", stopHackDrag);
 hackGrid.addEventListener("lostpointercapture", stopHackDrag);
 
 let fireRepeatId = null;
+let autoFireRepeatId = null;
+let fireHoldTimerId = null;
+let keyboardFireHeld = false;
+
+function canUseFireControls() {
+  return !game.paused && !game.bossDefeated && ["flight", "chronoRun"].includes(game.mode);
+}
+
+function triggerFireControl(now = performance.now()) {
+  if (!canUseFireControls()) {
+    return false;
+  }
+  if (game.mode === "chronoRun") {
+    fireRunWeapon();
+  } else {
+    fireWeapon(now);
+  }
+  return true;
+}
+
+function syncAutoFireUi() {
+  fireButton.classList.toggle("auto-fire", game.autoFire);
+  touchFireZone.classList.toggle("auto-fire", game.autoFire);
+  fireButton.setAttribute("aria-pressed", String(game.autoFire || fireButton.classList.contains("pressed")));
+}
+
+function stopAutoFireLoop() {
+  if (autoFireRepeatId !== null) {
+    window.clearInterval(autoFireRepeatId);
+    autoFireRepeatId = null;
+  }
+}
+
+function startAutoFireLoop() {
+  stopAutoFireLoop();
+  triggerFireControl();
+  autoFireRepeatId = window.setInterval(() => {
+    if (!game.autoFire || !canUseFireControls()) {
+      setAutoFire(false, { silent: true });
+      return;
+    }
+    triggerFireControl();
+  }, FIRE_REPEAT_INTERVAL_MS);
+}
+
+function setAutoFire(enabled, { silent = false } = {}) {
+  const nextAutoFire = Boolean(enabled) && canUseFireControls();
+  if (game.autoFire === nextAutoFire && (nextAutoFire ? autoFireRepeatId !== null : autoFireRepeatId === null)) {
+    syncAutoFireUi();
+    return;
+  }
+
+  game.autoFire = nextAutoFire;
+  if (nextAutoFire) {
+    stopFireRepeat();
+    startAutoFireLoop();
+  } else {
+    stopAutoFireLoop();
+  }
+  syncAutoFireUi();
+
+  if (!silent) {
+    damageReadout.textContent = nextAutoFire ? "AUTO FIRE ON" : "AUTO FIRE OFF";
+    setToast(nextAutoFire ? "AUTO FIRE ON" : "AUTO FIRE OFF", 900);
+  }
+}
+
+function toggleAutoFire() {
+  setAutoFire(!game.autoFire);
+}
+
+function clearFireHoldTimer() {
+  if (fireHoldTimerId !== null) {
+    window.clearTimeout(fireHoldTimerId);
+    fireHoldTimerId = null;
+  }
+}
+
+function startFireHoldTimer() {
+  clearFireHoldTimer();
+  fireHoldTimerId = window.setTimeout(() => {
+    fireHoldTimerId = null;
+    toggleAutoFire();
+    stopFireRepeat();
+  }, AUTO_FIRE_TOGGLE_HOLD_MS);
+}
 
 function stopFireRepeat() {
   if (fireRepeatId !== null) {
     window.clearInterval(fireRepeatId);
     fireRepeatId = null;
   }
+  clearFireHoldTimer();
   fireButton.classList.remove("pressed");
   touchFireZone.classList.remove("pressed");
+  syncAutoFireUi();
+}
+
+function startManualFireRepeat() {
+  if (game.autoFire) {
+    return;
+  }
+  triggerFireControl();
+  fireRepeatId = window.setInterval(() => {
+    if (!canUseFireControls()) {
+      stopFireRepeat();
+      return;
+    }
+    triggerFireControl();
+  }, FIRE_REPEAT_INTERVAL_MS);
+}
+
+function beginFireHold() {
+  stopFireRepeat();
+  fireButton.classList.add("pressed");
+  touchFireZone.classList.add("pressed");
+  syncAutoFireUi();
+  startFireHoldTimer();
+  startManualFireRepeat();
 }
 
 function handleFirePointerDown(event) {
@@ -3425,28 +3578,13 @@ function handleFirePointerDown(event) {
     cancelHack();
     return;
   }
+  if (!canUseFireControls()) {
+    return;
+  }
   flashControl(fireButton);
   flashControl(touchFireZone);
   capturePointer(event.currentTarget, event);
-  stopFireRepeat();
-  fireButton.classList.add("pressed");
-  touchFireZone.classList.add("pressed");
-  if (game.mode === "chronoRun") {
-    fireRunWeapon();
-  } else {
-    fireWeapon();
-  }
-  fireRepeatId = window.setInterval(() => {
-    if (game.paused || !["flight", "chronoRun"].includes(game.mode) || game.bossDefeated) {
-      stopFireRepeat();
-      return;
-    }
-    if (game.mode === "chronoRun") {
-      fireRunWeapon();
-    } else {
-      fireWeapon();
-    }
-  }, 90);
+  beginFireHold();
 }
 
 fireButton.addEventListener("pointerdown", handleFirePointerDown);
@@ -3645,7 +3783,9 @@ restartOverlay.addEventListener("pointerdown", (event) => {
 
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
+  const flightAction = mapFlightInput(event);
+
+  if (event.key === "Escape" || flightAction === "pause") {
     event.preventDefault();
     setPaused(!game.paused);
     return;
@@ -3671,7 +3811,6 @@ window.addEventListener("keydown", (event) => {
     return;
   }
 
-  const flightAction = mapFlightInput(event);
   const hackAction = mapHackInput(event);
   if (flightAction || hackAction) {
     event.preventDefault();
@@ -3691,10 +3830,9 @@ window.addEventListener("keydown", (event) => {
   } else if (flightAction === "moveRight") {
     moveFlight("moveRight");
   } else if (flightAction === "fire") {
-    if (game.mode === "chronoRun") {
-      fireRunWeapon();
-    } else {
-      fireWeapon();
+    if (!event.repeat && canUseFireControls()) {
+      keyboardFireHeld = true;
+      beginFireHold();
     }
   } else if (flightAction === "switchWeapon") {
     cycleWeapon();
@@ -3707,7 +3845,20 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+window.addEventListener("keyup", (event) => {
+  if (mapFlightInput(event) !== "fire") {
+    return;
+  }
+  event.preventDefault();
+  if (!keyboardFireHeld) {
+    return;
+  }
+  keyboardFireHeld = false;
+  stopFireRepeat();
+});
+
 resizeCanvas();
 updateWeaponUi();
+syncAutoFireUi();
 updateHud();
 requestAnimationFrame(update);

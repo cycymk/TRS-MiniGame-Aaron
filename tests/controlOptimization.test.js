@@ -201,6 +201,80 @@ test("holding the mobile fire zone keeps firing instead of sending one shot", as
   assert.ok(ammoWidth < 96);
 });
 
+test("minus key toggles the pause overlay during combat", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await startGame(page);
+
+  await page.keyboard.press("-");
+  await page.waitForSelector("#pauseOverlay:not(.hidden)");
+  assert.equal(await page.locator("#pauseButton").getAttribute("aria-pressed"), "true");
+
+  await page.keyboard.press("-");
+  await page.locator("#pauseOverlay").waitFor({ state: "hidden" });
+  assert.equal(await page.locator("#pauseButton").getAttribute("aria-pressed"), "false");
+});
+
+test("holding fire for two seconds toggles auto fire on and off", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await startGame(page);
+
+  const fireBox = await page.locator("#fireButton").boundingBox();
+  assert.notEqual(fireBox, null);
+  const fireX = fireBox.x + fireBox.width / 2;
+  const fireY = fireBox.y + fireBox.height / 2;
+
+  await page.mouse.move(fireX, fireY);
+  await page.mouse.down();
+  await page.waitForFunction(
+    () => document.querySelector("#fireButton")?.classList.contains("auto-fire"),
+    undefined,
+    { timeout: 2600 },
+  );
+  await page.mouse.up();
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), true);
+
+  await page.mouse.down();
+  await page.waitForFunction(
+    () => !document.querySelector("#fireButton")?.classList.contains("auto-fire"),
+    undefined,
+    { timeout: 2600 },
+  );
+  await page.mouse.up();
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), false);
+
+  await page.keyboard.down("0");
+  await page.waitForFunction(
+    () => document.querySelector("#fireButton")?.classList.contains("auto-fire"),
+    undefined,
+    { timeout: 2600 },
+  );
+  await page.keyboard.up("0");
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), true);
+
+  await page.keyboard.down("0");
+  await page.waitForFunction(
+    () => !document.querySelector("#fireButton")?.classList.contains("auto-fire"),
+    undefined,
+    { timeout: 2600 },
+  );
+  await page.keyboard.up("0");
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), false);
+});
+
 test("starting on mobile requests fullscreen for the game shell", async (t) => {
   const { server, url } = await startStaticServer();
   t.after(() => server.close());
