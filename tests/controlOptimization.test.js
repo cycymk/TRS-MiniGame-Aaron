@@ -405,14 +405,16 @@ test("chrono run target distance triggers a mothership encounter before boss mod
   await page.waitForSelector("#runHud:not(.hidden)");
 
   await page.waitForFunction(
-    () => document.querySelector("#damageReadout")?.textContent?.includes("MOTHERSHIP"),
+    () => document.querySelector("#damageReadout")?.textContent?.includes("BOSS APPROACH"),
     undefined,
     { timeout: 5000 },
   );
   assert.equal(await page.locator("#runHud").isVisible(), true);
 
   await page.waitForFunction(
-    () => document.querySelector("#damageReadout")?.textContent === "DAMAGE READY",
+    () =>
+      document.querySelector("#runHud")?.classList.contains("hidden") &&
+      !document.querySelector("#bossBar")?.parentElement?.classList.contains("hidden"),
     undefined,
     { timeout: 6000 },
   );

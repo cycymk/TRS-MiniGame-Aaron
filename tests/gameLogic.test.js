@@ -114,9 +114,10 @@ test("weapon nodes are counted once when routing through the hack board", () => 
 });
 
 test("hack success opens a break window that grows by one second per boost", () => {
-  assert.equal(resolveHackBreakDuration({ boostsCollected: 0 }), 4000);
-  assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 5000);
-  assert.equal(resolveHackBreakDuration({ boostsCollected: 3 }), 7000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 0 }), 8000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 9000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 3 }), 11000);
+  assert.equal(resolveHackBreakDuration({ boostsCollected: 8 }), 12000);
 });
 
 test("player damage spends one ship only when hp reaches zero", () => {
@@ -143,11 +144,12 @@ test("boss shield splits normal damage into cancel, shield, and hull portions", 
     baseDamage: 100,
   });
 
-  assert.equal(shieldedHit.bossHp, 178);
-  assert.equal(shieldedHit.bossShieldHp, 22);
-  assert.equal(shieldedHit.canceledDamage, 90);
-  assert.equal(shieldedHit.shieldDamage, 8);
-  assert.equal(shieldedHit.hullDamage, 2);
+  assert.equal(shieldedHit.bossHp, 172);
+  assert.equal(shieldedHit.bossShieldHp, 0);
+  assert.equal(shieldedHit.canceledDamage, 47);
+  assert.equal(shieldedHit.shieldDamage, 30);
+  assert.equal(shieldedHit.hullDamage, 8);
+  assert.equal(shieldedHit.shieldBroken, true);
 });
 
 test("break state damage is less shielded and broken shield exposes full hull damage", () => {
@@ -158,11 +160,11 @@ test("break state damage is less shielded and broken shield exposes full hull da
     damageProfile: "break",
   });
 
-  assert.equal(breakHit.bossHp, 170);
-  assert.equal(breakHit.bossShieldHp, 20);
-  assert.equal(breakHit.canceledDamage, 20);
-  assert.equal(breakHit.shieldDamage, 70);
-  assert.equal(breakHit.hullDamage, 10);
+  assert.equal(breakHit.bossHp, 145);
+  assert.equal(breakHit.bossShieldHp, 25);
+  assert.equal(breakHit.canceledDamage, 0);
+  assert.equal(breakHit.shieldDamage, 65);
+  assert.equal(breakHit.hullDamage, 35);
 
   const exposedHit = applyShieldedBossDamage({
     bossHp: 170,

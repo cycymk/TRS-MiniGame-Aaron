@@ -245,6 +245,31 @@
         </div>
       </section>
 
+      <section id="resultOverlay" class="result-overlay hidden" aria-label="result summary">
+        <div class="result-dialog">
+          <header>
+            <span id="resultEyebrow">RUN COMPLETE</span>
+            <h2 id="resultTitle">挑戰結果</h2>
+            <p id="resultSubtitle">成績同步中</p>
+          </header>
+          <div class="result-stats">
+            <div><span>距離</span><strong id="resultDistance">0 LY</strong></div>
+            <div><span>擊殺</span><strong id="resultKills">0</strong></div>
+            <div><span>分數</span><strong id="resultScore">0</strong></div>
+            <div><span>排名</span><strong id="resultRank">--</strong></div>
+          </div>
+          <div id="resultBadges" class="result-badges" aria-label="badges"></div>
+          <section class="leaderboard-panel" aria-label="leaderboard">
+            <header>
+              <h3>TOP 10</h3>
+              <span id="leaderboardSync">LOCAL</span>
+            </header>
+            <ol id="leaderboardList"></ol>
+          </section>
+          <button id="resultReplayButton" class="result-replay-button" type="button">再玩一次</button>
+        </div>
+      </section>
+
       <div id="toast" class="toast hidden" role="status"></div>
     </main>
 

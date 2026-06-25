@@ -15,7 +15,7 @@ const DEFAULT_ENEMY_TUNING = {
 const DEFAULT_STAGE = {
   id: "chrono-run-1",
   objective: "distance",
-  targetDistance: 1200,
+  targetDistance: 1800,
   difficulty: 1,
   enemyTuning: DEFAULT_ENEMY_TUNING,
   enemyOverrides: {},
@@ -64,6 +64,8 @@ export function createRunState({
   ammo = 100,
   distance = 0,
   score = 0,
+  kills = 0,
+  elapsedMs = 0,
   entities = [],
   effects = {},
   events = [],
@@ -81,6 +83,8 @@ export function createRunState({
     ammo: clamp(ammo, 0, 100),
     distance: Math.max(0, distance),
     score: Math.max(0, score),
+    kills: Math.max(0, kills),
+    elapsedMs: Math.max(0, elapsedMs),
     entities: entities.map((entity) => normalizeEntity(entity, normalizeStage(stage))),
     effects: normalizeEffects(effects),
     events,
@@ -125,6 +129,7 @@ export function updateRunState(state, input = {}, deltaMs = 16, random = Math.ra
     ...next,
     distance,
     score: Math.floor(next.score + safeDelta * 0.001 * 8 * speedForDistance),
+    elapsedMs: next.elapsedMs + safeDelta,
     entities: reachedTarget ? [] : next.entities,
     status: reachedTarget ? "motherShipEncounter" : next.status,
   };
@@ -174,6 +179,7 @@ export function applyRunShot(state) {
     ammo: Math.max(0, current.ammo - 6),
     entities,
     score: current.score + defeatedScore,
+    kills: current.kills + (defeatedScore > 0 ? 1 : 0),
     events: hitEvent ? [...current.events, hitEvent] : current.events,
   };
 }
@@ -192,14 +198,23 @@ export function resolveRunCollision(state, entityId) {
         ...current,
         entities,
       },
-      "slowMotion",
+      "speedBoost",
     );
     return {
       ...rewarded,
       events: [
         ...current.events,
-        { type: "buff", rewardType: "slowMotion", lane: entity.lane, z: entity.z },
+        { type: "buff", rewardType: "speedBoost", lane: entity.lane, z: entity.z },
       ],
+    };
+  }
+
+  if (entity.kind === "item" && entity.type === "minigameTrigger") {
+    return {
+      ...current,
+      status: "minigame",
+      pendingReward: "minigame",
+      entities,
     };
   }
 
@@ -242,6 +257,7 @@ export function applyRunReward(state, rewardType) {
   }
 
   if (rewardType === "screenBomb") {
+    const clearedEnemies = current.entities.filter((entity) => entity.kind === "enemy").length;
     const cleared = current.entities.filter(
       (entity) => entity.kind === "enemy" || entity.kind === "enemyBullet",
     ).length;
@@ -253,6 +269,7 @@ export function applyRunReward(state, rewardType) {
         (entity) => entity.kind !== "enemy" && entity.kind !== "enemyBullet",
       ),
       score: current.score + cleared * 100,
+      kills: current.kills + clearedEnemies,
     };
   }
 
@@ -295,19 +312,22 @@ export function spawnRunEntity(state, random = Math.random) {
   const roll = random();
   const lane = randomLane(random);
   const id = `run-${current.nextEntityId}`;
+  const difficulty = getRunDifficulty(current);
   let entity;
 
-  if (roll < 0.28) {
+  if (roll < difficulty.heavy) {
     entity = createEnemyEntity(id, "enemyA", lane, current.stage);
-  } else if (roll < 0.54) {
-    entity = createEnemyEntity(id, "enemyB", lane, current.stage);
-  } else if (roll < 0.84) {
+  } else if (roll < difficulty.fast) {
     entity = createEnemyEntity(id, "enemyC", lane, current.stage);
-  } else if (roll < 0.94) {
+  } else if (roll < difficulty.scout) {
+    entity = createEnemyEntity(id, "enemyB", lane, current.stage);
+  } else if (roll < difficulty.turret) {
+    entity = createEnemyEntity(id, "enemyB", lane, current.stage);
+  } else if (roll < difficulty.item) {
     entity = {
       id,
       kind: "item",
-      type: "speedEnergy",
+      type: random() < 0.68 ? "speedEnergy" : "minigameTrigger",
       lane,
       z: 1.08,
       approachSpeed: 0.5,
@@ -324,10 +344,74 @@ export function spawnRunEntity(state, random = Math.random) {
     };
   }
 
+  entity = tuneEntityForDifficulty(entity, difficulty);
   return {
     ...current,
     nextEntityId: current.nextEntityId + 1,
     entities: [...current.entities, entity],
+  };
+}
+
+function getRunDifficulty(state) {
+  const distance = state.distance ?? 0;
+  const early = (state.elapsedMs ?? 0) < 15000;
+  if (early || distance < 300) {
+    return {
+      heavy: 0.12,
+      fast: 0.26,
+      scout: 0.42,
+      turret: 0.52,
+      item: 0.92,
+      spawnMin: 1450,
+      spawnRange: 780,
+      shotMultiplier: 1.55,
+    };
+  }
+  if (distance < 700) {
+    return {
+      heavy: 0.18,
+      fast: 0.38,
+      scout: 0.58,
+      turret: 0.72,
+      item: 0.92,
+      spawnMin: 1080,
+      spawnRange: 620,
+      shotMultiplier: 1.25,
+    };
+  }
+  if (distance < 1200) {
+    return {
+      heavy: 0.22,
+      fast: 0.44,
+      scout: 0.66,
+      turret: 0.84,
+      item: 0.94,
+      spawnMin: 820,
+      spawnRange: 560,
+      shotMultiplier: 1,
+    };
+  }
+  return {
+    heavy: 0.26,
+    fast: 0.5,
+    scout: 0.72,
+    turret: 0.9,
+    item: 0.96,
+    spawnMin: 620,
+    spawnRange: 460,
+    shotMultiplier: 0.85,
+  };
+}
+
+function tuneEntityForDifficulty(entity, difficulty) {
+  if (entity.kind !== "enemy" || !entity.shootEveryMs) {
+    return entity;
+  }
+  const shootEveryMs = Math.round(entity.shootEveryMs * difficulty.shotMultiplier);
+  return {
+    ...entity,
+    shootEveryMs,
+    shotTimerMs: shootEveryMs,
   };
 }
 
@@ -421,9 +505,10 @@ function advanceRunEntities(state, deltaMs, random) {
   const spawnTimerMs = next.spawnTimerMs - deltaMs;
   if (spawnTimerMs <= 0) {
     const spawned = spawnRunEntity(next, random);
+    const difficulty = getRunDifficulty(next);
     return {
       ...spawned,
-      spawnTimerMs: 820 + Math.floor(random() * 680),
+      spawnTimerMs: difficulty.spawnMin + Math.floor(random() * difficulty.spawnRange),
     };
   }
 
@@ -459,6 +544,8 @@ function normalizeState(state) {
     ammo: clamp(state.ammo ?? 100, 0, 100),
     distance: Math.max(0, state.distance ?? 0),
     score: Math.max(0, state.score ?? 0),
+    kills: Math.max(0, state.kills ?? 0),
+    elapsedMs: Math.max(0, state.elapsedMs ?? 0),
     entities: (state.entities ?? []).map((entity) => normalizeEntity(entity, stage)).flatMap((entity) => {
       return [entity];
     }),

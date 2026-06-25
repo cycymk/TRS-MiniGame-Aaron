@@ -36,6 +36,7 @@ const ammoBar = document.querySelector("#ammoBar");
 const distanceReadout = document.querySelector("#distanceReadout");
 const bossBar = document.querySelector("#bossBar");
 const bossShieldBar = document.querySelector("#bossShieldBar");
+const bossShieldLabel = document.querySelector(".boss-shield-row span");
 const damageReadout = document.querySelector("#damageReadout");
 const feverPanel = document.querySelector("#feverPanel");
 const feverValue = document.querySelector("#feverValue");
@@ -69,6 +70,18 @@ const weaponButtons = Array.from(document.querySelectorAll("[data-weapon]"));
 const restartOverlay = document.querySelector("#restartOverlay");
 const promptTitle = restartOverlay.querySelector("strong");
 const promptSubtitle = restartOverlay.querySelector("span");
+const resultOverlay = document.querySelector("#resultOverlay");
+const resultEyebrow = document.querySelector("#resultEyebrow");
+const resultTitle = document.querySelector("#resultTitle");
+const resultSubtitle = document.querySelector("#resultSubtitle");
+const resultDistance = document.querySelector("#resultDistance");
+const resultKills = document.querySelector("#resultKills");
+const resultScore = document.querySelector("#resultScore");
+const resultRank = document.querySelector("#resultRank");
+const resultBadges = document.querySelector("#resultBadges");
+const leaderboardSync = document.querySelector("#leaderboardSync");
+const leaderboardList = document.querySelector("#leaderboardList");
+const resultReplayButton = document.querySelector("#resultReplayButton");
 const livesIcons = document.querySelector("#livesIcons");
 const livesText = document.querySelector("#livesText");
 const pauseButton = document.querySelector("#pauseButton");
@@ -121,8 +134,8 @@ const BOSS_DEFEAT_SEQUENCE_MS = 4300;
 const BOSS_VICTORY_PROMPT_DELAY_MS = 1700;
 const RUN_INTRO_DURATION_MS = 1150;
 const RUN_CRASH_SEQUENCE_MS = 1650;
-const RUN_MOTHERSHIP_ENCOUNTER_MS = 1900;
 const RUN_HIT_FLASH_MS = 420;
+const RUN_TO_BOSS_TRANSITION_MS = 3000;
 const HACK_MIN_BOARD_SIZE = 4;
 const HACK_MAX_BOARD_SIZE = 7;
 const DISTANCE_LY_PER_SECOND = 0.42;
@@ -174,10 +187,13 @@ const AUTO_FIRE_TOGGLE_HOLD_MS = 2000;
 const chronoRunStage = {
   id: "chrono-run-v1",
   objective: "distance",
-  targetDistance: 1200,
+  targetDistance: 1800,
   difficulty: 1,
 };
 const runRewardOrder = ["speedBoost", "screenBomb", "temporaryInvincible"];
+const LEADERBOARD_KEY = "trs-chrono-run-leaderboard-v1";
+const REMOTE_LEADERBOARD_ENDPOINT = window.TRS_LEADERBOARD_ENDPOINT ?? "";
+const dailyChallengeSeed = getDailyChallengeSeed();
 
 function getRunTargetDistance() {
   const override = Number(new URLSearchParams(window.location.search).get("runTargetDistance"));
@@ -202,7 +218,17 @@ const game = {
   hack: null,
   hackReturnMode: null,
   run: null,
+  runRandom: null,
   runRewardIndex: 0,
+  runCompletedAt: 0,
+  runSummary: null,
+  challengeStartedAt: 0,
+  damageTaken: 0,
+  hitCount: 0,
+  feverKill: false,
+  resultEntry: null,
+  leaderboard: loadLocalLeaderboard(),
+  leaderboardSyncStatus: REMOTE_LEADERBOARD_ENDPOINT ? "SYNC READY" : "LOCAL",
   boostMultiplierPreview: 1,
   distanceLy: 0,
   travel: 0,
@@ -240,6 +266,7 @@ const game = {
   playerDeathStartedAt: 0,
   playerDeathOutcome: null,
   promptAction: null,
+  hasSeenHackHint: false,
   lastTime: performance.now(),
   paused: false,
   pausedAt: 0,
@@ -266,6 +293,7 @@ function enterHack(now = performance.now()) {
   });
   game.boostMultiplierPreview = 1;
   renderHackGrid();
+  showHackTutorialHint();
   setToast("BULLET TIME LINK OPEN", 900);
 }
 
@@ -282,6 +310,7 @@ function enterRunMinigame(now = performance.now()) {
   });
   game.boostMultiplierPreview = 1;
   renderHackGrid();
+  showHackTutorialHint();
   setToast("BULLET TIME / CHRONO CACHE", 1200);
 }
 
@@ -443,6 +472,8 @@ function applyDamageToPlayer(damage, { readout = "HULL DAMAGE", toast: toastMess
 
   game.hp = result.hp;
   game.lives = result.lives;
+  game.damageTaken += Math.max(0, damage);
+  game.hitCount += 1;
   damageReadout.textContent = readout;
   setToast(toastMessage, 1200);
 
@@ -538,6 +569,19 @@ function showHackRewardPopup(point, message) {
   popup.style.top = `${cellRect.top - shellRect.top}px`;
   gameShell.append(popup);
   window.setTimeout(() => popup.remove(), 1200);
+}
+
+function showHackTutorialHint() {
+  if (game.hasSeenHackHint || !hackPanel) {
+    return;
+  }
+
+  game.hasSeenHackHint = true;
+  const hint = document.createElement("div");
+  hint.className = "hack-tutorial-hint";
+  hint.innerHTML = "<strong>拖曳路線到 CORE</strong><span></span>";
+  hackPanel.append(hint);
+  window.setTimeout(() => hint.remove(), 3600);
 }
 
 function maybeResetBoss() {
@@ -642,6 +686,7 @@ function defeatBoss(now = performance.now()) {
   game.bossDefeated = true;
   setAutoFire(false, { silent: true });
   game.bossDefeatedAt = now;
+  game.feverKill = isFeverActive(now);
   game.victoryShownAt = 0;
   game.bossMode = "defeated";
   game.mode = "bossDying";
@@ -674,7 +719,15 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   game.hack = null;
   game.hackReturnMode = null;
   game.run = null;
+  game.runRandom = null;
   game.runRewardIndex = 0;
+  game.runCompletedAt = 0;
+  game.runSummary = null;
+  game.challengeStartedAt = startMode === "title" ? 0 : now;
+  game.damageTaken = 0;
+  game.hitCount = 0;
+  game.feverKill = false;
+  game.resultEntry = null;
   game.boostMultiplierPreview = 1;
   game.distanceLy = 0;
   game.travel = 0;
@@ -725,6 +778,7 @@ function resetGame(now = performance.now(), { startMode = "intro" } = {}) {
   syncAutoFireUi();
   syncPauseUi();
   hidePrompt();
+  hideResultOverlay();
   startOverlay.classList.toggle("hidden", startMode !== "title");
   damageReadout.textContent = "DAMAGE READY";
   if (startMode === "title") {
@@ -760,9 +814,12 @@ function startIntro(now = performance.now(), { resetWorld = false } = {}) {
   game.hack = null;
   game.hackReturnMode = null;
   game.run = null;
+  game.runCompletedAt = 0;
+  game.runSummary = null;
   game.paused = false;
   game.lastTime = now;
   hidePrompt();
+  hideResultOverlay();
   startOverlay.classList.add("hidden");
   syncPauseUi();
   renderHackGrid();
@@ -779,6 +836,13 @@ function startChronoRun(now = performance.now()) {
   game.hack = null;
   game.hackReturnMode = null;
   game.runRewardIndex = 0;
+  game.runCompletedAt = 0;
+  game.runSummary = null;
+  game.resultEntry = null;
+  game.challengeStartedAt = now;
+  game.damageTaken = 0;
+  game.hitCount = 0;
+  game.feverKill = false;
   game.run = createRunState({
     stage: {
       ...chronoRunStage,
@@ -790,8 +854,9 @@ function startChronoRun(now = performance.now()) {
       { id: "intro-heavy", kind: "enemy", type: "enemyA", lane: 0, z: 0.88 },
       { id: "intro-cache", kind: "item", type: "speedEnergy", lane: 2, z: 0.96 },
     ],
-    spawnTimerMs: 1900,
+    spawnTimerMs: 2400,
   });
+  game.runRandom = createSeededRandom(dailyChallengeSeed);
   game.distanceLy = 0;
   game.travel = 0;
   game.speedPulse = 0.7;
@@ -806,6 +871,7 @@ function startChronoRun(now = performance.now()) {
   game.promptAction = null;
   startOverlay.classList.add("hidden");
   hidePrompt();
+  hideResultOverlay();
   syncPauseUi();
   renderHackGrid();
   damageReadout.textContent = "CHRONO RUN";
@@ -823,6 +889,22 @@ function restartChronoBoss(now = performance.now()) {
 
 function returnToStartScreen(now = performance.now()) {
   resetGame(now, { startMode: "title" });
+}
+
+function enterBossFromRun(now = performance.now()) {
+  const runSummary = game.runSummary ?? createRunSummary("bossApproach");
+  game.runSummary = runSummary;
+  game.mode = "flight";
+  game.run = null;
+  game.hack = null;
+  game.hackReturnMode = null;
+  game.bossMode = "normal";
+  game.bossModeStartedAt = now;
+  game.lastShotAt = now;
+  game.lastTime = now;
+  game.speedPulse = 1.05;
+  damageReadout.textContent = "CHRONO BOSS";
+  setToast("CHRONO BOSS / FINAL TARGET", 1400);
 }
 
 function isMobileFullscreenCandidate() {
@@ -939,7 +1021,21 @@ function beginPlayerDestroyed(outcome, now = performance.now()) {
 function triggerPlayerHit(now = performance.now(), damage = 0) {
   game.playerHitStartedAt = now;
   game.playerHitUntil = now + RUN_HIT_FLASH_MS;
+  game.damageTaken += Math.max(0, damage);
+  game.hitCount += damage > 0 ? 1 : 0;
   game.speedPulse = Math.max(game.speedPulse, 0.78);
+  blasts.push({
+    born: now,
+    damage: 0,
+    small: false,
+    type: "runImpact",
+    lane: game.lane,
+    laneTarget: game.laneTarget,
+    laneVelocity: game.laneVelocity,
+    shielded: false,
+  });
+  damageReadout.textContent = damage > 0 ? `RED HIT -${Math.ceil(damage)}` : "RED HIT";
+  setToast("RED CONTACT DAMAGE", 700);
 }
 
 function beginRunCrash(now = performance.now()) {
@@ -947,7 +1043,8 @@ function beginRunCrash(now = performance.now()) {
     return;
   }
 
-  triggerPlayerHit(now, game.hp);
+  game.runSummary = createRunSummary("failed");
+  triggerPlayerHit(now, 0);
   game.mode = "runCrashed";
   game.runCrashStartedAt = now;
   game.playerDeathStartedAt = now;
@@ -964,6 +1061,7 @@ function beginRunMothershipEncounter(now = performance.now()) {
     return;
   }
 
+  game.runSummary = createRunSummary("bossApproach");
   if (game.run) {
     game.run = {
       ...game.run,
@@ -973,12 +1071,15 @@ function beginRunMothershipEncounter(now = performance.now()) {
   }
   game.mode = "motherShipEncounter";
   game.runEncounterStartedAt = now;
+  game.runCompletedAt = now;
+  game.hack = null;
+  game.hackReturnMode = null;
   game.laneVelocity = 0;
   game.speedPulse = 1.2;
   shots.length = 0;
   runVisualEffects.length = 0;
-  damageReadout.textContent = "MOTHERSHIP ENCOUNTER";
-  setToast("遭遇 MOTHERSHIP", 1700);
+  damageReadout.textContent = "BOSS APPROACH";
+  setToast("BOSS APPROACH", RUN_TO_BOSS_TRANSITION_MS);
 }
 
 function continuePlayer(now = performance.now()) {
@@ -1008,6 +1109,211 @@ function showPrompt(title, subtitle, action) {
 function hidePrompt() {
   game.promptAction = null;
   restartOverlay.classList.add("hidden");
+}
+
+function createRunSummary(outcome) {
+  const run = game.run;
+  const runSummary = game.runSummary ?? {};
+  const distance = Math.max(run?.distance ?? runSummary.distance ?? game.distanceLy ?? 0, game.distanceLy ?? 0);
+  const kills = Math.max(run?.kills ?? 0, runSummary.kills ?? 0);
+  const runScore = Math.max(run?.score ?? 0, runSummary.runScore ?? 0);
+  const elapsedMs =
+    game.challengeStartedAt > 0
+      ? Math.max(0, performance.now() - game.challengeStartedAt)
+      : Math.max(run?.elapsedMs ?? 0, runSummary.elapsedMs ?? 0);
+  return {
+    id: `${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+    seed: dailyChallengeSeed,
+    outcome,
+    distance,
+    kills,
+    runScore,
+    elapsedMs,
+    damageTaken: game.damageTaken,
+    hitCount: game.hitCount,
+    bossDefeated: game.bossDefeated,
+    feverKill: game.feverKill,
+  };
+}
+
+function createResultEntry(summary) {
+  const clearBonus = summary.bossDefeated ? 5000 : 0;
+  const feverBonus = summary.feverKill ? 1200 : 0;
+  const noDamageBonus = summary.hitCount === 0 ? 1500 : 0;
+  const score = Math.floor(summary.runScore + summary.distance * 2 + summary.kills * 180 + clearBonus + feverBonus + noDamageBonus);
+  return {
+    ...summary,
+    score,
+    createdAt: new Date().toISOString(),
+    badges: getResultBadges(summary),
+  };
+}
+
+function getResultBadges(summary) {
+  const badges = [`Seed ${summary.seed}`];
+  if (summary.distance >= chronoRunStage.targetDistance) {
+    badges.push("BOSS APPROACH");
+  }
+  if (summary.bossDefeated) {
+    badges.push("挑戰過關");
+  }
+  if (summary.hitCount === 0) {
+    badges.push("無傷獎章");
+  }
+  if (summary.feverKill) {
+    badges.push("Fever 擊破");
+  }
+  return badges;
+}
+
+function applyRecordBadges(entry) {
+  const bestDistance = Math.max(0, ...game.leaderboard.map((candidate) => candidate.distance ?? 0));
+  const fastestClear = Math.min(
+    Infinity,
+    ...game.leaderboard
+      .filter((candidate) => candidate.bossDefeated)
+      .map((candidate) => candidate.elapsedMs ?? Infinity),
+  );
+  if (entry.distance > bestDistance) {
+    entry.badges.push("最佳距離");
+  }
+  if (entry.bossDefeated && entry.elapsedMs < fastestClear) {
+    entry.badges.push("最快通關");
+  }
+}
+
+function showResultOverlay(summary) {
+  if (!resultOverlay || game.mode === "result") {
+    return;
+  }
+
+  const entry = createResultEntry(summary);
+  applyRecordBadges(entry);
+  game.resultEntry = entry;
+  game.mode = "result";
+  game.paused = false;
+  game.hack = null;
+  game.hackReturnMode = null;
+  game.run = null;
+  hidePrompt();
+  startOverlay.classList.add("hidden");
+  renderHackGrid();
+  updateLeaderboard(entry);
+  renderResultOverlay(entry);
+  resultOverlay.classList.remove("hidden");
+}
+
+function hideResultOverlay() {
+  resultOverlay?.classList.add("hidden");
+}
+
+function renderResultOverlay(entry) {
+  const leaderboard = game.leaderboard;
+  const rank = getLeaderboardRank(entry, leaderboard);
+  resultEyebrow.textContent = entry.bossDefeated ? "MISSION CLEAR" : "RUN COMPLETE";
+  resultTitle.textContent = entry.bossDefeated ? "挑戰過關" : "挑戰結束";
+  resultSubtitle.textContent = `今日挑戰 Seed ${entry.seed}`;
+  resultDistance.textContent = `${Math.floor(entry.distance)} LY`;
+  resultKills.textContent = `${entry.kills}`;
+  resultScore.textContent = entry.score.toLocaleString("en-US");
+  resultRank.textContent = rank > 0 ? `#${rank}` : "--";
+  resultBadges.textContent = "";
+  entry.badges.forEach((badge) => {
+    const chip = document.createElement("span");
+    chip.textContent = badge;
+    resultBadges.append(chip);
+  });
+  leaderboardSync.textContent = game.leaderboardSyncStatus;
+  renderLeaderboard();
+}
+
+function renderLeaderboard() {
+  leaderboardList.textContent = "";
+  game.leaderboard.slice(0, 10).forEach((entry, index) => {
+    const item = document.createElement("li");
+    item.innerHTML = `<span>${index + 1}. ${entry.seed}</span><strong>${entry.score.toLocaleString("en-US")}</strong><em>${Math.floor(entry.distance)} LY</em>`;
+    leaderboardList.append(item);
+  });
+}
+
+function updateLeaderboard(entry) {
+  const merged = [entry, ...game.leaderboard]
+    .sort((a, b) => b.score - a.score || b.distance - a.distance || a.elapsedMs - b.elapsedMs)
+    .slice(0, 10);
+  game.leaderboard = merged;
+  saveLocalLeaderboard(merged);
+  syncRemoteLeaderboard(entry);
+}
+
+function getLeaderboardRank(entry, leaderboard) {
+  return leaderboard.findIndex((candidate) => candidate.id === entry.id) + 1;
+}
+
+function loadLocalLeaderboard() {
+  try {
+    const data = JSON.parse(localStorage.getItem(LEADERBOARD_KEY) ?? "[]");
+    return Array.isArray(data) ? data.slice(0, 10) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalLeaderboard(entries) {
+  try {
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(entries.slice(0, 10)));
+  } catch {
+    // Local storage can fail in private modes; gameplay should continue.
+  }
+}
+
+async function syncRemoteLeaderboard(entry) {
+  if (!REMOTE_LEADERBOARD_ENDPOINT) {
+    game.leaderboardSyncStatus = "LOCAL";
+    leaderboardSync.textContent = "LOCAL";
+    return;
+  }
+
+  game.leaderboardSyncStatus = "SYNCING";
+  leaderboardSync.textContent = "SYNCING";
+  try {
+    const response = await fetch(REMOTE_LEADERBOARD_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    const remoteEntries = await response.json();
+    if (Array.isArray(remoteEntries)) {
+      game.leaderboard = remoteEntries.slice(0, 10);
+      saveLocalLeaderboard(game.leaderboard);
+    }
+    game.leaderboardSyncStatus = "SYNCED";
+  } catch {
+    game.leaderboardSyncStatus = "LOCAL";
+  }
+  leaderboardSync.textContent = game.leaderboardSyncStatus;
+  renderLeaderboard();
+}
+
+function getDailyChallengeSeed(date = new Date()) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
+function createSeededRandom(seedText) {
+  let seed = 2166136261;
+  for (const char of String(seedText)) {
+    seed ^= char.charCodeAt(0);
+    seed = Math.imul(seed, 16777619);
+  }
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function activatePromptAction(now = performance.now()) {
@@ -1104,6 +1410,32 @@ function syncPauseUi() {
   pauseButton.setAttribute("aria-pressed", String(game.paused));
 }
 
+function hydrateStaticCopy() {
+  pauseButton.setAttribute("aria-label", "暫停");
+  document.querySelector("#pauseTitle").textContent = "暫停";
+  resumeButton.textContent = "繼續";
+  resumeButton.setAttribute("aria-label", "繼續遊戲");
+  const helpSummary = document.querySelector("[data-testid='game-help-summary']");
+  if (helpSummary) {
+    helpSummary.textContent = "左右移動閃避敵人，按住 FIRE 開火連續射擊，HACK 進入駭入操作取得破盾與獎勵。";
+  }
+  const sections = Array.from(document.querySelectorAll(".help-section"));
+  if (sections[0]) {
+    sections[0].querySelector("h3").textContent = "遊戲說明";
+  }
+  if (sections[1]) {
+    sections[1].querySelector("h3").textContent = "操作說明 / 駭入提示";
+    sections[1].querySelector("ul").innerHTML = `
+      <li>拖曳路線到 CORE，或用方向鍵 / 數字鍵 8 2 4 6 移動。</li>
+      <li>藍色節點提升破盾倍率，黃色 W 節點解鎖武器或提升火力。</li>
+      <li>紅色節點會造成駭入失敗，先觀察路線再出手。</li>
+      <li>CHRONO RUN 達成距離後會進入 BOSS APPROACH，接著直接挑戰母艦。</li>
+    `;
+  }
+  promptTitle.textContent = "再玩一次?";
+  promptSubtitle.textContent = "CLICK / TAP ANYWHERE";
+}
+
 function updateBoss(now, delta) {
   if (game.bossDefeated || !isGameplayActive()) {
     return;
@@ -1151,7 +1483,7 @@ function isRunVisualMode() {
 }
 
 function isDistanceCountingMode() {
-  return ["intro", "flight", "hack", "bossDying", "victory", "playerDestroyed"].includes(game.mode);
+  return ["intro", "flight", "hack", "motherShipEncounter", "bossDying", "victory", "playerDestroyed"].includes(game.mode);
 }
 
 function updateBossShieldRestore(now) {
@@ -1539,7 +1871,12 @@ function update(now) {
 
   const delta = Math.min(48, now - game.lastTime);
   game.lastTime = now;
-  const speed = game.mode === "hack" ? 0.35 : game.mode === "chronoRun" && game.run ? game.run.speed : 1;
+  const speed =
+    game.mode === "hack"
+      ? 0.35
+      : (game.mode === "chronoRun" || game.mode === "motherShipEncounter") && game.run
+        ? game.run.speed
+        : 1;
   updateViewMotion(delta);
   neonTunnel.update({
     now,
@@ -1555,6 +1892,7 @@ function update(now) {
   game.speedPulse = Math.max(0, game.speedPulse - delta * 0.0025);
   updateIntro(now, delta);
   updateChronoRunIntro(now, delta);
+  updateRunBossApproach(now);
   updateRunCrash(now);
   updateRunMothershipEncounter(now);
   updatePlayerDestroyed(now);
@@ -1575,18 +1913,22 @@ function update(now) {
     syncRunStateToGame();
   } else if (game.mode === "chronoRun" && game.run) {
     const previousHp = game.run.hp;
-    game.run = updateRunState(game.run, {}, delta);
+    game.run = updateRunState(game.run, {}, delta, game.runRandom ?? Math.random);
     if (game.run.hp < previousHp) {
       triggerPlayerHit(now, previousHp - game.run.hp);
     }
     consumeRunEvents(now);
     syncRunStateToGame();
     updateShipMovement(delta);
-    if (game.run.status === "failed") {
+    if (game.run.status === "minigame") {
+      enterRunMinigame(now);
+    } else if (game.run.status === "failed") {
       beginRunCrash(now);
     } else if (game.run.status === "motherShipEncounter") {
       beginRunMothershipEncounter(now);
     }
+  } else if (game.mode === "motherShipEncounter") {
+    updateShipMovement(delta);
   } else if (game.hack) {
     game.hack = updateHackTimer(game.hack, now);
     const remaining = Math.max(0, game.hack.expiresAt - now);
@@ -1676,7 +2018,11 @@ function consumeRunEvents(now = performance.now()) {
         z: event.z,
         rewardType: event.rewardType,
       });
-      if (event.rewardType === "slowMotion") {
+      if (event.rewardType === "speedBoost") {
+        game.speedPulse = Math.max(game.speedPulse, 1.25);
+        damageReadout.textContent = "SPEED BOOST";
+        setToast("YELLOW CACHE / SPEED BOOST", 900);
+      } else if (event.rewardType === "slowMotion") {
         game.speedPulse = Math.max(game.speedPulse, 0.85);
         damageReadout.textContent = "TIME SLOW";
         setToast("YELLOW CACHE / TIME SLOW", 900);
@@ -1728,13 +2074,27 @@ function updateChronoRunIntro(now, delta = 16) {
   }
 }
 
+function updateRunBossApproach(now) {
+  if (game.mode !== "bossApproach") {
+    return;
+  }
+
+  const elapsed = now - game.runCompletedAt;
+  const remaining = Math.max(0, RUN_TO_BOSS_TRANSITION_MS - elapsed);
+  game.speedPulse = Math.max(game.speedPulse, 0.6 + remaining / RUN_TO_BOSS_TRANSITION_MS * 0.5);
+  damageReadout.textContent = `BOSS APPROACH ${Math.ceil(remaining / 1000)}`;
+  if (elapsed >= RUN_TO_BOSS_TRANSITION_MS) {
+    enterBossFromRun(now);
+  }
+}
+
 function updateRunCrash(now) {
   if (game.mode !== "runCrashed") {
     return;
   }
 
   if (now - game.runCrashStartedAt >= RUN_CRASH_SEQUENCE_MS) {
-    returnToStartScreen(now);
+    showResultOverlay(createRunSummary("failed"));
   }
 }
 
@@ -1743,8 +2103,12 @@ function updateRunMothershipEncounter(now) {
     return;
   }
 
-  if (now - game.runEncounterStartedAt >= RUN_MOTHERSHIP_ENCOUNTER_MS) {
-    resetGame(now, { startMode: "intro" });
+  const elapsed = now - game.runEncounterStartedAt;
+  const remaining = Math.max(0, RUN_TO_BOSS_TRANSITION_MS - elapsed);
+  game.speedPulse = Math.max(game.speedPulse, 0.6 + remaining / RUN_TO_BOSS_TRANSITION_MS * 0.5);
+  damageReadout.textContent = `BOSS APPROACH ${Math.ceil(remaining / 1000)}`;
+  if (elapsed >= RUN_TO_BOSS_TRANSITION_MS) {
+    enterBossFromRun(now);
   }
 }
 
@@ -1757,7 +2121,7 @@ function updatePlayerDestroyed(now) {
     return;
   }
 
-  returnToStartScreen(now);
+  showResultOverlay(createRunSummary("failed"));
 }
 
 function updateBossVictory(now) {
@@ -1771,6 +2135,11 @@ function updateBossVictory(now) {
     game.victoryShownAt = now;
     damageReadout.textContent = "YOU WIN!";
     setToast("YOU WIN! / 挑戰過關", BOSS_VICTORY_PROMPT_DELAY_MS);
+    return;
+  }
+
+  if (game.mode === "victory" && game.victoryShownAt > 0 && now - game.victoryShownAt >= BOSS_VICTORY_PROMPT_DELAY_MS) {
+    showResultOverlay(createRunSummary("victory"));
     return;
   }
 
@@ -1806,22 +2175,20 @@ function updateHud() {
   bossBar.style.width = `${(game.bossHp / BOSS_MAX_HP) * 100}%`;
   bossShieldBar.style.width = `${(game.bossShieldHp / BOSS_MAX_SHIELD) * 100}%`;
   bossShieldBar.parentElement.classList.toggle("break", isBossBreakActive());
+  bossShieldLabel.textContent = isBossBreakActive() ? "WEAK x3" : "SHIELD";
   feverValue.textContent = feverActive ? `${Math.ceil(feverRemaining / 1000)}s` : `${Math.floor(feverProgress)}%`;
   feverPanel.style.setProperty("--fever-progress", `${feverProgress}%`);
   feverPanel.classList.toggle("active", feverActive);
   ammoBar.parentElement.classList.toggle("fever-active", feverActive);
   gameShell.classList.toggle("fever-active", feverActive);
-  const runModeActive = ["chronoRunIntro", "chronoRun", "runCrashed", "motherShipEncounter"].includes(game.mode);
+  const runModeActive = isRunVisualMode();
   gameShell.classList.toggle("run-active", runModeActive);
-  runHud.classList.toggle(
-    "hidden",
-    !["chronoRun", "runCrashed", "motherShipEncounter"].includes(game.mode),
-  );
+  runHud.classList.toggle("hidden", !["chronoRun", "motherShipEncounter", "runCrashed"].includes(game.mode));
   if (game.run) {
-    runObjective.textContent = "CHRONO RUN";
+    runObjective.textContent = game.mode === "motherShipEncounter" ? "BOSS APPROACH" : "CHRONO RUN";
     runStatusText.textContent =
       game.mode === "motherShipEncounter"
-        ? "MOTHERSHIP ENCOUNTER"
+        ? "FINAL TARGET INBOUND"
         : game.run.effects.invincibleMs > 0
         ? "INVINCIBLE"
         : game.run.effects.speedBoostMs > 0
@@ -3781,6 +4148,11 @@ restartOverlay.addEventListener("pointerdown", (event) => {
   activatePromptAction();
 });
 
+resultReplayButton?.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  restartChronoRun();
+});
+
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("keydown", (event) => {
   const flightAction = mapFlightInput(event);
@@ -3858,6 +4230,7 @@ window.addEventListener("keyup", (event) => {
 });
 
 resizeCanvas();
+hydrateStaticCopy();
 updateWeaponUi();
 syncAutoFireUi();
 updateHud();

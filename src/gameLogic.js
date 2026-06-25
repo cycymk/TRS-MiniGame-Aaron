@@ -169,7 +169,7 @@ export function updateHackTimer(state, now) {
 }
 
 export function resolveHackBreakDuration({ boostsCollected = 0 } = {}) {
-  return 4000 + Math.max(0, boostsCollected) * 1000;
+  return Math.min(12000, 8000 + Math.max(0, boostsCollected) * 1000);
 }
 
 export function applyPlayerDamage({ hp = 100, lives = 3, damage = 0 } = {}) {
@@ -200,8 +200,8 @@ export function applyShieldedBossDamage({
   const shieldBefore = Math.max(0, bossShieldHp);
   const profile =
     damageProfile === "break" || damageProfile === "hack"
-      ? { shield: 0.7, hull: 0.1, cancel: 0.2 }
-      : { shield: 0.08, hull: 0.02, cancel: 0.9 };
+      ? { shield: 0.65, hull: 0.35, cancel: 0 }
+      : { shield: 0.45, hull: 0.08, cancel: 0.47 };
   const shieldActive = shieldBefore > 0;
   const rawShieldDamage = shieldActive ? incomingDamage * profile.shield : 0;
   const shieldDamage = Math.min(shieldBefore, rawShieldDamage);
