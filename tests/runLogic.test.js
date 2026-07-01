@@ -220,6 +220,8 @@ test("speed energy items are consumed and immediately accelerate the run", () =>
   assert.equal(next.speed > RUN_BASE_SPEED, true);
   assert.equal(next.events[0].type, "buff");
   assert.equal(next.events[0].rewardType, "speedBoost");
+  assert.equal(next.events[0].effectType, "pickup");
+  assert.equal(next.events[0].entityType, "speedEnergy");
   assert.equal(next.events[0].lane, 1);
   assert.ok(next.events[0].z <= 0.04);
 });

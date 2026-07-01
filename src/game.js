@@ -3,13 +3,19 @@ import {
   NODE_LABELS,
   applyPlayerDamage,
   applyShieldedBossDamage,
+  calculateSonicBoomWaveGeometry,
   createInitialHackState,
   createRandomHackBoard,
+  formatHackBreakBonus,
+  getBossHackBoardConfig,
+  getRunHackReward,
   mapFlightInput,
   mapHackInput,
   moveHackCursor,
   randomBoostMultiplier,
+  resolveBossHackOutcome,
   resolveHackBreakDuration,
+  shouldDrawBossBeam,
   shouldAdvancePromptFromKey,
   updateHackTimer,
 } from "./gameLogic.js";
@@ -190,8 +196,8 @@ const chronoRunStage = {
   targetDistance: 1800,
   difficulty: 1,
 };
-const runRewardOrder = ["speedBoost", "screenBomb", "temporaryInvincible"];
 const LEADERBOARD_KEY = "trs-chrono-run-leaderboard-v1";
+const HACK_TUTORIAL_SKIP_KEY = "trs-skip-hack-tutorial-v1";
 const REMOTE_LEADERBOARD_ENDPOINT = window.TRS_LEADERBOARD_ENDPOINT ?? "";
 const dailyChallengeSeed = getDailyChallengeSeed();
 
@@ -201,6 +207,26 @@ function getRunTargetDistance() {
     return override;
   }
   return chronoRunStage.targetDistance;
+}
+
+function loadHackTutorialSkipped() {
+  try {
+    return window.localStorage?.getItem(HACK_TUTORIAL_SKIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveHackTutorialSkipped(skipped) {
+  try {
+    if (skipped) {
+      window.localStorage?.setItem(HACK_TUTORIAL_SKIP_KEY, "1");
+    } else {
+      window.localStorage?.removeItem(HACK_TUTORIAL_SKIP_KEY);
+    }
+  } catch {
+    // Local storage can fail in private modes; gameplay should continue.
+  }
 }
 
 const game = {
@@ -217,6 +243,8 @@ const game = {
   bossShieldHp: BOSS_MAX_SHIELD,
   hack: null,
   hackReturnMode: null,
+  hackKind: "boss",
+  hackVariant: "break",
   run: null,
   runRandom: null,
   runRewardIndex: 0,
@@ -266,7 +294,8 @@ const game = {
   playerDeathStartedAt: 0,
   playerDeathOutcome: null,
   promptAction: null,
-  hasSeenHackHint: false,
+  hasSeenHackHint: loadHackTutorialSkipped(),
+  skipHackTutorial: loadHackTutorialSkipped(),
   lastTime: performance.now(),
   paused: false,
   pausedAt: 0,
@@ -285,10 +314,18 @@ function enterHack(now = performance.now()) {
     return;
   }
 
+  const boardConfig = getBossHackBoardConfig({
+    bossMode: game.bossMode,
+    hackLevel: game.hackLevel,
+    minSize: HACK_MIN_BOARD_SIZE,
+    maxSize: HACK_MAX_BOARD_SIZE,
+  });
   game.hackReturnMode = "flight";
+  game.hackKind = "boss";
+  game.hackVariant = boardConfig.variant;
   game.mode = "hack";
   game.hack = createInitialHackState({
-    board: createRandomHackBoard({ size: getHackBoardSize() }),
+    board: createRandomHackBoard(boardConfig),
     now,
   });
   game.boostMultiplierPreview = 1;
@@ -303,9 +340,16 @@ function enterRunMinigame(now = performance.now()) {
   }
 
   game.hackReturnMode = "chronoRun";
+  game.hackKind = "run";
+  game.hackVariant = "runReward";
   game.mode = "hack";
   game.hack = createInitialHackState({
-    board: createRandomHackBoard({ size: HACK_MIN_BOARD_SIZE }),
+    board: createRandomHackBoard({
+      size: HACK_MIN_BOARD_SIZE,
+      trapMode: "none",
+      routeBoostLimit: 1,
+      weaponCount: 0,
+    }),
     now,
   });
   game.boostMultiplierPreview = 1;
@@ -325,6 +369,8 @@ function cancelHack() {
   game.mode = game.hackReturnMode === "chronoRun" ? "chronoRun" : "flight";
   game.hackReturnMode = null;
   game.hack = null;
+  game.hackKind = "boss";
+  game.hackVariant = "break";
   renderHackGrid();
   setToast("HACK CANCELLED", 650);
 }
@@ -410,7 +456,7 @@ function resolveHack(status) {
 
   if (game.hackReturnMode === "chronoRun") {
     if (status === "success") {
-      const reward = getNextRunReward();
+      const reward = getRunHackReward(game.runRewardIndex);
       game.run = applyRunReward(game.run, reward);
       game.runRewardIndex += 1;
       game.speedPulse = reward === "speedBoost" ? 1 : game.speedPulse;
@@ -427,6 +473,8 @@ function resolveHack(status) {
     game.mode = "chronoRun";
     game.hack = null;
     game.hackReturnMode = null;
+    game.hackKind = "boss";
+    game.hackVariant = "break";
     renderHackGrid();
     return;
   }
@@ -437,13 +485,27 @@ function resolveHack(status) {
       boostsCollected: game.hack.boostsCollected,
     });
     const weaponPickups = getSuccessfulHackWeaponPickups(game.hack);
-    game.bossBreakUntil = Math.max(game.bossBreakUntil, now + breakDuration);
+    const outcome = resolveBossHackOutcome({
+      bossMode: game.bossMode,
+      now,
+      baseBreakDuration: breakDuration,
+      currentBreakUntil: game.bossBreakUntil,
+    });
+    game.bossBreakUntil = outcome.breakUntil;
+    if (outcome.resetBossModeTimer && outcome.nextBossMode !== game.bossMode) {
+      setBossMode(outcome.nextBossMode, now);
+    }
     game.ammo = Math.min(100, game.ammo + 26);
     game.hackLevel = Math.min(game.hackLevel + 1, HACK_MAX_BOARD_SIZE - HACK_MIN_BOARD_SIZE);
     applyHackWeaponRewards(weaponPickups);
     gainFever(FEVER_GAINS.hackSuccess + weaponPickups.length * FEVER_GAINS.weaponReward, now);
-    damageReadout.textContent = `SHIELD BREAK ${formatTimeSeconds(breakDuration)}`;
-    setToast(`HACK SUCCESS / BREAK ${formatTimeSeconds(breakDuration)}`, 1400);
+    const resultText = outcome.interruptedAttack
+      ? "ATTACK INTERRUPTED"
+      : outcome.extendedCooldownBreak
+        ? "BREAK EXTENDED"
+        : "SHIELD BREAK";
+    damageReadout.textContent = `${resultText} ${formatTimeSeconds(breakDuration)}`;
+    setToast(`HACK SUCCESS / ${resultText}`, 1400);
   } else {
     applyDamageToPlayer(HACK_FAIL_DAMAGE, {
       readout: "HACK FAILED - LIGHT DAMAGE",
@@ -455,6 +517,8 @@ function resolveHack(status) {
     game.mode = "flight";
   }
   game.hack = null;
+  game.hackKind = "boss";
+  game.hackVariant = "break";
   maybeResetBoss();
   renderHackGrid();
 }
@@ -486,10 +550,6 @@ function applyDamageToPlayer(damage, { readout = "HULL DAMAGE", toast: toastMess
 
 function canDamagePlayer() {
   return game.mode === "flight" || game.mode === "hack" || game.mode === "chronoRun";
-}
-
-function getNextRunReward() {
-  return runRewardOrder[game.runRewardIndex % runRewardOrder.length];
 }
 
 function formatRunReward(reward) {
@@ -572,14 +632,19 @@ function showHackRewardPopup(point, message) {
 }
 
 function showHackTutorialHint() {
-  if (game.hasSeenHackHint || !hackPanel) {
+  if (game.hasSeenHackHint || game.skipHackTutorial || !hackPanel) {
     return;
   }
 
   game.hasSeenHackHint = true;
   const hint = document.createElement("div");
   hint.className = "hack-tutorial-hint";
+  hint.dataset.testid = "hack-first-tutorial";
   hint.innerHTML = "<strong>拖曳路線到 CORE</strong><span></span>";
+  hint.innerHTML = `
+    <strong>連到 CORE 完成 Hack</strong>
+    <span>藍點 +1.0s BREAK，紅點失敗。Boss 充能時成功可打斷攻擊。</span>
+  `;
   hackPanel.append(hint);
   window.setTimeout(() => hint.remove(), 3600);
 }
@@ -1436,6 +1501,64 @@ function hydrateStaticCopy() {
   promptSubtitle.textContent = "CLICK / TAP ANYWHERE";
 }
 
+function hydrateReadableStaticCopy() {
+  pauseButton.setAttribute("aria-label", "暫停");
+  document.querySelector("#pauseTitle").textContent = "暫停";
+  resumeButton.textContent = "繼續";
+  resumeButton.setAttribute("aria-label", "繼續遊戲");
+  const sections = Array.from(document.querySelectorAll(".help-section"));
+  const helpSummary = document.querySelector("[data-testid='game-help-summary']");
+  if (helpSummary) {
+    helpSummary.textContent =
+      "Run 階段累積速度與距離，Boss 戰用武器輸出，Hack 負責破防與打斷攻擊。";
+  }
+  if (sections[0]) {
+    sections[0].querySelector("h3").textContent = "遊戲目標";
+  }
+  if (sections[1]) {
+    sections[1].querySelector("h3").textContent = "操作";
+    sections[1].querySelector("ul").innerHTML = `
+      <li>左右移動：方向鍵 / 數字 4、6 / 觸控左右區</li>
+      <li>射擊：Alt / 數字 0 / FIRE，長按 2 秒切換自動射擊</li>
+      <li>切換武器：Delete / 小數點</li>
+      <li>Hack：+ / HACK 按鈕，HackUI 中用 8、2、4、6 移動</li>
+    `;
+  }
+  let hackSection = document.querySelector("[data-testid='hack-help-section']");
+  if (!hackSection) {
+    hackSection = document.createElement("div");
+    hackSection.className = "help-section";
+    hackSection.dataset.testid = "hack-help-section";
+    const modeActions = document.querySelector(".pause-mode-actions");
+    pauseOverlay.querySelector(".pause-dialog").insertBefore(hackSection, modeActions);
+  }
+  hackSection.innerHTML = `
+    <h3>Hack 玩法</h3>
+    <ul>
+      <li>連到 CORE 完成 Hack；紅點會失敗，灰格不可通過。</li>
+      <li>Boss 階段：成功會開啟 BREAK TIME，藍點 +1.0s BREAK。</li>
+      <li>Boss 充能/發射時成功可打斷攻擊；冷卻時成功會延長破防。</li>
+      <li>Run 階段：碰到 Hack 道具會進短版 Hack，成功預設給 SPEED BOOST。</li>
+    </ul>
+    <label class="skip-tutorial-option" for="skipHackTutorial">
+      <button id="skipHackTutorial" type="button" role="checkbox" aria-checked="false"></button>
+      <span>略過第一次 Hack 教學，以後不顯示</span>
+    </label>
+  `;
+  const checkbox = document.querySelector("#skipHackTutorial");
+  if (checkbox) {
+    checkbox.setAttribute("aria-checked", String(game.skipHackTutorial));
+    checkbox.addEventListener("click", () => {
+      game.skipHackTutorial = !game.skipHackTutorial;
+      game.hasSeenHackHint = game.skipHackTutorial;
+      checkbox.setAttribute("aria-checked", String(game.skipHackTutorial));
+      saveHackTutorialSkipped(game.skipHackTutorial);
+    });
+  }
+  promptTitle.textContent = "再試一次";
+  promptSubtitle.textContent = "CLICK / TAP ANYWHERE";
+}
+
 function updateBoss(now, delta) {
   if (game.bossDefeated || !isGameplayActive()) {
     return;
@@ -1575,10 +1698,20 @@ function renderHackGrid() {
     });
   });
 
-  const multiplierText =
-    game.hack.boostsCollected > 0 ? `x${game.boostMultiplierPreview}` : "x1";
-  boostCounter.textContent = multiplierText;
-  routeStats.textContent = `${game.hack.board.length}x${game.hack.board.length} / ${game.hack.weaponsCollected} WPN`;
+  const damageLabel = hackPanel.querySelector(".damage-label");
+  if (damageLabel) {
+    damageLabel.textContent = game.hackReturnMode === "chronoRun" ? "RUN REWARD" : "BREAK TIME";
+  }
+  boostCounter.textContent = formatHackBreakBonus(game.hack.boostsCollected);
+  const variantText =
+    game.hackReturnMode === "chronoRun"
+      ? "RUN SPEED"
+      : game.hackVariant === "interrupt"
+        ? "INTERRUPT"
+        : game.hackVariant === "exploit"
+          ? "COOLDOWN"
+          : "BREAK";
+  routeStats.textContent = `${game.hack.board.length}x${game.hack.board.length} / ${variantText}`;
   hackStatus.textContent =
     game.hack.status === "success"
       ? "CORE BREACHED"
@@ -1596,7 +1729,7 @@ function moveHack(direction) {
   game.hack = moveHackCursor(game.hack, direction);
   if (game.hack.boostsCollected > beforeBoosts) {
     game.boostMultiplierPreview *= randomBoostMultiplier(Math.random);
-    setToast(`BOOST LINK x${game.boostMultiplierPreview}`, 650);
+    setToast("藍點 +1.0s BREAK", 650);
   }
 
   renderHackGrid();
@@ -2017,6 +2150,8 @@ function consumeRunEvents(now = performance.now()) {
         lane: event.lane,
         z: event.z,
         rewardType: event.rewardType,
+        effectType: event.effectType,
+        entityType: event.entityType,
       });
       if (event.rewardType === "speedBoost") {
         game.speedPulse = Math.max(game.speedPulse, 1.25);
@@ -2433,19 +2568,25 @@ function drawRunVisualEffects(width, height, now) {
     const progress = age / lifetime;
     const alpha = 1 - progress;
     if (effect.type === "buff") {
-      drawRunBuffEffect(width, height, effect, progress, alpha);
+      drawRunBuffEffect(width, height, effect, progress, alpha, now);
     } else if (effect.type === "enemyHit") {
       drawRunEnemyHitEffect(width, height, effect, progress, alpha);
     }
   }
 }
 
-function drawRunBuffEffect(width, height, effect, progress, alpha) {
+function drawRunBuffEffect(width, height, effect, progress, alpha, now) {
   const pose = getShipPose(width, height);
   const radius = Math.min(width, height) * (0.08 + progress * 0.12);
 
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
+
+  if (effect.rewardType === "speedBoost") {
+    drawRunSpeedPickupBurst(width, height, effect, progress, alpha, now);
+    drawShipSonicBoomWave(width, height, progress, alpha, 1.15);
+  }
+
   ctx.strokeStyle = `rgba(255, 224, 87, ${0.75 * alpha})`;
   ctx.fillStyle = `rgba(255, 212, 72, ${0.12 * alpha})`;
   ctx.lineWidth = Math.max(2, width * 0.0035);
@@ -2460,6 +2601,89 @@ function drawRunBuffEffect(width, height, effect, progress, alpha) {
   ctx.lineTo(pose.x, pose.y - radius * 0.72);
   ctx.lineTo(pose.x + radius * 0.8, pose.y + radius * 0.15);
   ctx.stroke();
+  ctx.restore();
+}
+
+function drawRunSpeedPickupBurst(width, height, effect, progress, alpha, now) {
+  const point = projectRunPoint(width, height, effect.lane, effect.z);
+  const scale = Math.max(0.35, 1.18 - effect.z);
+  const baseRadius = Math.max(14, width * 0.028 * scale);
+  const burstRadius = baseRadius * (0.7 + progress * 2.7);
+  const flashAlpha = alpha * (effect.effectType === "pickup" ? 1 : 0.72);
+
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = `rgba(255, 236, 112, ${0.8 * flashAlpha})`;
+  ctx.shadowBlur = baseRadius * 1.6;
+
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, burstRadius * 1.18);
+  gradient.addColorStop(0, `rgba(255, 255, 232, ${0.58 * flashAlpha})`);
+  gradient.addColorStop(0.38, `rgba(255, 220, 70, ${0.24 * flashAlpha})`);
+  gradient.addColorStop(1, "rgba(255, 174, 42, 0)");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, burstRadius * 1.18, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = `rgba(255, 249, 178, ${0.82 * flashAlpha})`;
+  ctx.lineWidth = Math.max(1.6, baseRadius * 0.1);
+  ctx.beginPath();
+  ctx.arc(0, 0, burstRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (let index = 0; index < 10; index += 1) {
+    const angle = (Math.PI * 2 * index) / 10 + now * 0.004;
+    const distance = baseRadius * (0.5 + progress * (1.9 + (index % 3) * 0.25));
+    const shard = baseRadius * (0.12 + (index % 4) * 0.025) * Math.max(0.22, alpha);
+    ctx.fillStyle = index % 2 === 0
+      ? `rgba(255, 245, 139, ${0.88 * flashAlpha})`
+      : `rgba(102, 238, 255, ${0.68 * flashAlpha})`;
+    ctx.beginPath();
+    ctx.arc(Math.cos(angle) * distance, Math.sin(angle) * distance * 0.72, shard, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawShipSonicBoomWave(width, height, progress, alpha, intensity = 1) {
+  const pose = getShipPose(width, height);
+  const shipWidth = Math.min(width * 0.22, 250);
+  const shipHeight = shipWidth * 0.68;
+  const pulse = Math.max(0, Math.min(1, progress));
+  const fade = Math.max(0, alpha) * (1 - pulse * 0.72) * intensity;
+
+  ctx.save();
+  ctx.translate(pose.x, pose.y);
+  ctx.rotate(pose.rotation);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = `rgba(255, 233, 112, ${0.68 * fade})`;
+  ctx.shadowBlur = shipWidth * (0.08 + pulse * 0.1);
+
+  for (let index = 0; index < 3; index += 1) {
+    const wave = calculateSonicBoomWaveGeometry({
+      shipWidth,
+      shipHeight,
+      progress: pulse,
+      index,
+    });
+    const waveFade = fade * (1 - wave.progress * 0.78);
+
+    ctx.strokeStyle = `rgba(255, 245, 168, ${0.62 * waveFade})`;
+    ctx.lineWidth = Math.max(1.4, shipWidth * 0.012 * (1 + wave.progress));
+    ctx.beginPath();
+    ctx.ellipse(0, wave.y, wave.width, wave.height, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(104, 236, 255, ${0.28 * waveFade})`;
+    ctx.beginPath();
+    ctx.moveTo(-wave.width * 0.72, wave.y - wave.height * 0.18);
+    ctx.lineTo(0, wave.y + wave.height * 1.3);
+    ctx.lineTo(wave.width * 0.72, wave.y - wave.height * 0.18);
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -2549,7 +2773,7 @@ function drawRunItemArtifact(radius, now, alpha) {
   ctx.font = `950 ${Math.max(11, radius * 0.82)}px "Segoe UI", sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("SLOW+", 0, radius * 0.06);
+  ctx.fillText("BOOST", 0, radius * 0.06);
   ctx.restore();
 }
 
@@ -2915,7 +3139,7 @@ function getBossImageRenderSize(size) {
 }
 
 function drawActiveBossBeam(width, height, now) {
-  if (game.bossMode !== "beam") {
+  if (!shouldDrawBossBeam(game)) {
     return;
   }
 
@@ -3249,6 +3473,12 @@ function drawShip(width, height, now) {
       : 0;
   const flamePulse = 0.82 + Math.sin(now * 0.026) * 0.16 + Math.sin(now * 0.051) * 0.08;
   const boost = 1 + game.speedPulse * 0.45;
+
+  if (game.run?.effects.speedBoostMs > 0 && deathProgress === 0) {
+    const waveProgress = (now * 0.00135) % 1;
+    const buffAlpha = Math.min(0.95, 0.35 + game.speedPulse * 0.42);
+    drawShipSonicBoomWave(width, height, waveProgress, buffAlpha, 0.9);
+  }
 
   ctx.save();
   ctx.translate(shipX + hitShake + crashShake, shipY + Math.cos(now * 0.17) * hitShake * 0.45);
@@ -4231,6 +4461,7 @@ window.addEventListener("keyup", (event) => {
 
 resizeCanvas();
 hydrateStaticCopy();
+hydrateReadableStaticCopy();
 updateWeaponUi();
 syncAutoFireUi();
 updateHud();

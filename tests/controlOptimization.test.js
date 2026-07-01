@@ -120,6 +120,20 @@ test("mobile touch zones match the drawn movement and fire regions", async (t) =
   assert.equal(hits.rightUpper, "touchMoveRightZone");
   assert.ok(["touchWeaponZone", null].includes(hits.weaponButton));
   assert.ok(["touchHackZone", "hackButton"].includes(hits.hackButton));
+
+  const touchMetrics = await page.evaluate(() => ({
+    inputs: document.querySelectorAll("input, textarea, select").length,
+    bodyTouchAction: getComputedStyle(document.body).touchAction,
+    bodyUserSelect: getComputedStyle(document.body).userSelect,
+    canvasTouchAction: getComputedStyle(document.querySelector("#spaceCanvas")).touchAction,
+    canvasUserSelect: getComputedStyle(document.querySelector("#spaceCanvas")).userSelect,
+  }));
+
+  assert.equal(touchMetrics.inputs, 0);
+  assert.equal(touchMetrics.bodyTouchAction, "none");
+  assert.equal(touchMetrics.bodyUserSelect, "none");
+  assert.equal(touchMetrics.canvasTouchAction, "none");
+  assert.equal(touchMetrics.canvasUserSelect, "none");
 });
 
 test("weapon node label is centered and sized to fill most of its cell", async (t) => {

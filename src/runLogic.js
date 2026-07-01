@@ -204,7 +204,14 @@ export function resolveRunCollision(state, entityId) {
       ...rewarded,
       events: [
         ...current.events,
-        { type: "buff", rewardType: "speedBoost", lane: entity.lane, z: entity.z },
+        {
+          type: "buff",
+          rewardType: "speedBoost",
+          effectType: "pickup",
+          entityType: entity.type,
+          lane: entity.lane,
+          z: entity.z,
+        },
       ],
     };
   }

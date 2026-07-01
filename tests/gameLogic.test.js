@@ -5,15 +5,50 @@ import {
   MIN_BOARD_SIZE,
   applyShieldedBossDamage,
   applyPlayerDamage,
+  calculateSonicBoomWaveGeometry,
   createInitialHackState,
   createRandomHackBoard,
+  formatHackBreakBonus,
+  getBossHackBoardConfig,
+  getRunHackReward,
   mapFlightInput,
   mapHackInput,
+  resolveBossHackOutcome,
+  shouldDrawBossBeam,
   shouldAdvancePromptFromKey,
   moveHackCursor,
   resolveHackBreakDuration,
   updateHackTimer,
 } from "../src/gameLogic.js";
+
+test("sonic boom waves expand backward from the ship nose", () => {
+  const early = calculateSonicBoomWaveGeometry({
+    shipWidth: 220,
+    shipHeight: 150,
+    progress: 0,
+    index: 0,
+  });
+  const late = calculateSonicBoomWaveGeometry({
+    shipWidth: 220,
+    shipHeight: 150,
+    progress: 0.82,
+    index: 0,
+  });
+
+  assert.ok(early.y < 0);
+  assert.ok(late.y > early.y);
+  assert.ok(late.y > 0);
+  assert.ok(late.width > early.width);
+});
+
+test("boss beam only draws during boss combat modes", () => {
+  assert.equal(shouldDrawBossBeam({ mode: "flight", bossMode: "beam" }), true);
+  assert.equal(shouldDrawBossBeam({ mode: "hack", bossMode: "beam" }), true);
+  assert.equal(shouldDrawBossBeam({ mode: "chronoRun", bossMode: "beam" }), false);
+  assert.equal(shouldDrawBossBeam({ mode: "chronoRunIntro", bossMode: "beam" }), false);
+  assert.equal(shouldDrawBossBeam({ mode: "motherShipEncounter", bossMode: "beam" }), false);
+  assert.equal(shouldDrawBossBeam({ mode: "flight", bossMode: "normal" }), false);
+});
 
 test("hack board is a 6x6 grid with cursor starting on START", () => {
   const state = createInitialHackState();
@@ -118,6 +153,84 @@ test("hack success opens a break window that grows by one second per boost", () 
   assert.equal(resolveHackBreakDuration({ boostsCollected: 1 }), 9000);
   assert.equal(resolveHackBreakDuration({ boostsCollected: 3 }), 11000);
   assert.equal(resolveHackBreakDuration({ boostsCollected: 8 }), 12000);
+  assert.equal(formatHackBreakBonus(0), "+0.0s BREAK");
+  assert.equal(formatHackBreakBonus(2), "+2.0s BREAK");
+});
+
+test("run hack reward defaults to speed boost only", () => {
+  assert.equal(getRunHackReward(), "speedBoost");
+  assert.equal(getRunHackReward(99), "speedBoost");
+});
+
+test("boss hack outcome changes by boss phase", () => {
+  const charging = resolveBossHackOutcome({
+    bossMode: "charging",
+    now: 1000,
+    baseBreakDuration: 8000,
+    currentBreakUntil: 0,
+  });
+  assert.equal(charging.nextBossMode, "cooldown");
+  assert.equal(charging.resetBossModeTimer, true);
+  assert.equal(charging.breakUntil, 9000);
+  assert.equal(charging.interruptedAttack, true);
+
+  const beam = resolveBossHackOutcome({
+    bossMode: "beam",
+    now: 2000,
+    baseBreakDuration: 8000,
+    currentBreakUntil: 0,
+  });
+  assert.equal(beam.nextBossMode, "cooldown");
+  assert.equal(beam.interruptedAttack, true);
+  assert.equal(beam.breakUntil, 10000);
+
+  const cooldown = resolveBossHackOutcome({
+    bossMode: "cooldown",
+    now: 1000,
+    baseBreakDuration: 8000,
+    currentBreakUntil: 5000,
+  });
+  assert.equal(cooldown.nextBossMode, "cooldown");
+  assert.equal(cooldown.resetBossModeTimer, false);
+  assert.equal(cooldown.breakUntil, 13000);
+  assert.equal(cooldown.extendedCooldownBreak, true);
+});
+
+test("boss hack board config varies by boss phase", () => {
+  const normal = getBossHackBoardConfig({ bossMode: "normal", hackLevel: 2 });
+  const charging = getBossHackBoardConfig({ bossMode: "charging", hackLevel: 2 });
+  const cooldown = getBossHackBoardConfig({ bossMode: "cooldown", hackLevel: 2 });
+
+  assert.equal(normal.size, 6);
+  assert.equal(normal.weaponCount, 1);
+  assert.equal(charging.variant, "interrupt");
+  assert.equal(charging.size <= normal.size, true);
+  assert.equal(charging.trapMode, "none");
+  assert.equal(charging.weaponCount, 0);
+  assert.equal(cooldown.variant, "exploit");
+  assert.equal(cooldown.weaponCount, 2);
+  assert.ok(cooldown.extraOffRouteBoosts > normal.extraOffRouteBoosts);
+});
+
+test("random hack board can produce phase-specific node mixes", () => {
+  const interruptBoard = createRandomHackBoard({
+    size: 5,
+    trapMode: "none",
+    weaponCount: 0,
+    random: makeRandom([0.2, 0.7, 0.1, 0.9, 0.35]),
+  });
+  const exploitBoard = createRandomHackBoard({
+    size: 6,
+    weaponCount: 2,
+    extraOffRouteBoosts: 2,
+    routeBoostLimit: 3,
+    random: makeRandom([0.2, 0.7, 0.1, 0.9, 0.35]),
+  });
+
+  assert.equal(interruptBoard.flat().filter((node) => node === "trap").length, 0);
+  assert.equal(interruptBoard.flat().filter((node) => node === "weapon").length, 0);
+  assert.equal(exploitBoard.flat().filter((node) => node === "weapon").length, 2);
+  assert.ok(exploitBoard.flat().filter((node) => node === "boost").length >= 4);
 });
 
 test("player damage spends one ship only when hp reaches zero", () => {

@@ -53,7 +53,14 @@ export function createInitialHackState({ board = DEFAULT_BOARD, now = 0 } = {}) 
   };
 }
 
-export function createRandomHackBoard({ random = Math.random, size = DEFAULT_BOARD_SIZE } = {}) {
+export function createRandomHackBoard({
+  random = Math.random,
+  size = DEFAULT_BOARD_SIZE,
+  trapMode = "auto",
+  routeBoostLimit = 2,
+  extraOffRouteBoosts = 0,
+  weaponCount = 1,
+} = {}) {
   const boardSize = clamp(Math.round(size), MIN_BOARD_SIZE, MAX_BOARD_SIZE);
   const board = Array.from({ length: boardSize }, () =>
     Array.from({ length: boardSize }, () => "empty"),
@@ -70,13 +77,18 @@ export function createRandomHackBoard({ random = Math.random, size = DEFAULT_BOA
     .slice(1, -1)
     .filter((point) => board[point.row][point.col] === "empty");
   const shuffledRewardCells = shuffle(routeRewardCells, random);
-  const weaponCell = shuffledRewardCells.shift();
-  if (weaponCell) {
+  for (let index = 0; index < Math.max(0, weaponCount); index += 1) {
+    const weaponCell = shuffledRewardCells.shift();
+    if (!weaponCell) {
+      break;
+    }
     board[weaponCell.row][weaponCell.col] = "weapon";
   }
-  shuffledRewardCells.slice(0, Math.min(2, shuffledRewardCells.length)).forEach((point) => {
-    board[point.row][point.col] = "boost";
-  });
+  shuffledRewardCells
+    .slice(0, Math.min(Math.max(0, routeBoostLimit), shuffledRewardCells.length))
+    .forEach((point) => {
+      board[point.row][point.col] = "boost";
+    });
 
   const offRouteCells = [];
   for (let row = 0; row < boardSize; row += 1) {
@@ -91,10 +103,15 @@ export function createRandomHackBoard({ random = Math.random, size = DEFAULT_BOA
   shuffle(offRouteCells, random);
   const difficulty = Math.max(0, boardSize - MIN_BOARD_SIZE);
   placeNodes(board, offRouteCells, "block", 1 + difficulty + randomInt(random, 0, 1));
-  if (boardSize > MIN_BOARD_SIZE) {
+  if (trapMode !== "none" && boardSize > MIN_BOARD_SIZE) {
     placeNodes(board, offRouteCells, "trap", difficulty + randomInt(random, 0, 1));
   }
-  placeNodes(board, offRouteCells, "boost", 1 + difficulty + randomInt(random, 0, 1));
+  placeNodes(
+    board,
+    offRouteCells,
+    "boost",
+    1 + difficulty + randomInt(random, 0, 1) + Math.max(0, extraOffRouteBoosts),
+  );
 
   return board;
 }
@@ -172,6 +189,85 @@ export function resolveHackBreakDuration({ boostsCollected = 0 } = {}) {
   return Math.min(12000, 8000 + Math.max(0, boostsCollected) * 1000);
 }
 
+export function formatHackBreakBonus(boostsCollected = 0) {
+  return `+${Math.max(0, boostsCollected).toFixed(1)}s BREAK`;
+}
+
+export function getRunHackReward() {
+  return "speedBoost";
+}
+
+export function getBossHackBoardConfig({
+  bossMode = "normal",
+  hackLevel = 0,
+  minSize = MIN_BOARD_SIZE,
+  maxSize = MAX_BOARD_SIZE,
+} = {}) {
+  const baseSize = clamp(minSize + Math.max(0, hackLevel), minSize, maxSize);
+  if (bossMode === "charging" || bossMode === "beam") {
+    return {
+      variant: "interrupt",
+      size: Math.min(baseSize, minSize + 1),
+      trapMode: "none",
+      routeBoostLimit: 1,
+      extraOffRouteBoosts: 0,
+      weaponCount: 0,
+    };
+  }
+  if (bossMode === "cooldown") {
+    return {
+      variant: "exploit",
+      size: baseSize,
+      trapMode: "auto",
+      routeBoostLimit: 3,
+      extraOffRouteBoosts: 2,
+      weaponCount: 2,
+    };
+  }
+  return {
+    variant: "break",
+    size: baseSize,
+    trapMode: "auto",
+    routeBoostLimit: 2,
+    extraOffRouteBoosts: 0,
+    weaponCount: 1,
+  };
+}
+
+export function resolveBossHackOutcome({
+  bossMode = "normal",
+  now = 0,
+  baseBreakDuration = 0,
+  currentBreakUntil = 0,
+} = {}) {
+  const duration = Math.max(0, baseBreakDuration);
+  if (bossMode === "charging" || bossMode === "beam") {
+    return {
+      nextBossMode: "cooldown",
+      resetBossModeTimer: true,
+      breakUntil: now + duration,
+      interruptedAttack: true,
+      extendedCooldownBreak: false,
+    };
+  }
+  if (bossMode === "cooldown") {
+    return {
+      nextBossMode: "cooldown",
+      resetBossModeTimer: false,
+      breakUntil: Math.max(now, currentBreakUntil) + duration,
+      interruptedAttack: false,
+      extendedCooldownBreak: true,
+    };
+  }
+  return {
+    nextBossMode: bossMode,
+    resetBossModeTimer: false,
+    breakUntil: Math.max(currentBreakUntil, now + duration),
+    interruptedAttack: false,
+    extendedCooldownBreak: false,
+  };
+}
+
 export function applyPlayerDamage({ hp = 100, lives = 3, damage = 0 } = {}) {
   const nextHp = Math.max(0, hp - Math.max(0, damage));
   if (nextHp > 0) {
@@ -224,6 +320,28 @@ export function applyShieldedBossDamage({
 
 export function randomBoostMultiplier(random = Math.random) {
   return 10 + Math.floor(clamp(random(), 0, 0.999999) * 21);
+}
+
+export function calculateSonicBoomWaveGeometry({
+  shipWidth,
+  shipHeight,
+  progress,
+  index = 0,
+} = {}) {
+  const safeWidth = Math.max(0, shipWidth ?? 0);
+  const safeHeight = Math.max(0, shipHeight ?? 0);
+  const pulse = clamp(progress ?? 0, 0, 1);
+  const offsetProgress = clamp(pulse + index * 0.22, 0, 1);
+  return {
+    progress: offsetProgress,
+    y: safeHeight * (-0.62 + offsetProgress * 1.32),
+    width: safeWidth * (0.34 + offsetProgress * 0.98),
+    height: safeHeight * (0.08 + offsetProgress * 0.18),
+  };
+}
+
+export function shouldDrawBossBeam({ mode, bossMode } = {}) {
+  return bossMode === "beam" && (mode === "flight" || mode === "hack");
 }
 
 export function mapFlightInput(eventLike) {

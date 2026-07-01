@@ -30,14 +30,59 @@ test("pause icon opens help modal with game and control instructions", async (t)
 
   const overlay = page.locator("#pauseOverlay");
   const summary = page.locator("[data-testid='game-help-summary']");
+  const overlayText = await overlay.textContent();
 
   assert.equal(await overlay.isVisible(), true);
   assert.equal(await page.locator("#pauseButton").getAttribute("aria-pressed"), "true");
-  assert.match(await overlay.textContent(), /遊戲說明/);
-  assert.match(await overlay.textContent(), /操作說明/);
-  assert.match(await overlay.textContent(), /移動/);
-  assert.match(await overlay.textContent(), /開火/);
+  assert.match(overlayText, /遊戲目標/);
+  assert.match(overlayText, /操作/);
+  assert.match(overlayText, /Hack 玩法/);
+  assert.match(overlayText, /BREAK TIME/);
   assert.ok([...(await summary.textContent())].length <= 100);
+});
+
+test("pause modal can skip the first hack tutorial", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await page.evaluate(() => localStorage.clear());
+  await startGame(page);
+
+  await page.locator("#pauseButton").click();
+  await page.locator("#skipHackTutorial").click();
+  assert.equal(await page.locator("#skipHackTutorial").getAttribute("aria-checked"), "true");
+  await page.locator("#resumeButton").click();
+  await page.locator("#hackButton").click();
+  await page.waitForSelector("#hackPanel:not(.hidden)");
+
+  assert.equal(await page.locator("[data-testid='hack-first-tutorial']").isVisible(), false);
+});
+
+test("first hack shows concise break-time tutorial and updated labels", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await page.evaluate(() => localStorage.clear());
+  await startGame(page);
+
+  await page.locator("#hackButton").click();
+  await page.waitForSelector("#hackPanel:not(.hidden)");
+
+  const panelText = await page.locator("#hackPanel").textContent();
+  assert.match(panelText, /BREAK TIME/);
+  assert.match(panelText, /\+0\.0s BREAK/);
+  assert.match(panelText, /藍點 \+1\.0s BREAK/);
+  assert.equal(await page.locator("[data-testid='hack-first-tutorial']").isVisible(), true);
 });
 
 test("pause modal freezes hack countdown until the game resumes", async (t) => {
