@@ -95,6 +95,7 @@ const pauseOverlay = document.querySelector("#pauseOverlay");
 const resumeButton = document.querySelector("#resumeButton");
 const pauseRunButton = document.querySelector("#pauseRunButton");
 const pauseBossButton = document.querySelector("#pauseBossButton");
+const fpsCounter = document.querySelector("#fpsCounter");
 const toast = document.querySelector("#toast");
 const gameShell = document.querySelector(".game-shell");
 const neonTunnel = createNeonTunnel();
@@ -120,6 +121,10 @@ const viewMotion = {
   y: 0,
   targetX: 0,
   targetY: 0,
+};
+const fpsMeter = {
+  lastSampleAt: 0,
+  frames: 0,
 };
 
 const BOSS_MAX_HP = 180;
@@ -914,11 +919,6 @@ function startChronoRun(now = performance.now()) {
       targetDistance: getRunTargetDistance(),
     },
     now,
-    entities: [
-      { id: "intro-fast", kind: "enemy", type: "enemyC", lane: 1, z: 0.58 },
-      { id: "intro-heavy", kind: "enemy", type: "enemyA", lane: 0, z: 0.88 },
-      { id: "intro-cache", kind: "item", type: "speedEnergy", lane: 2, z: 0.96 },
-    ],
     spawnTimerMs: 2400,
   });
   game.runRandom = createSeededRandom(dailyChallengeSeed);
@@ -1424,7 +1424,6 @@ function setPaused(paused, now = performance.now()) {
   }
 
   if (paused) {
-    setAutoFire(false, { silent: true });
     game.paused = true;
     game.pausedAt = now;
     syncPauseUi();
@@ -1991,15 +1990,37 @@ function flashControl(element, duration = 180) {
   window.setTimeout(() => element.classList.remove("control-flash"), duration);
 }
 
+function updateFpsCounter(now) {
+  if (!fpsCounter) {
+    return;
+  }
+
+  if (!fpsMeter.lastSampleAt) {
+    fpsMeter.lastSampleAt = now;
+    fpsMeter.frames = 0;
+    return;
+  }
+
+  fpsMeter.frames += 1;
+  const elapsed = now - fpsMeter.lastSampleAt;
+  if (elapsed < 500) {
+    return;
+  }
+
+  const fps = Math.round((fpsMeter.frames * 1000) / elapsed);
+  fpsCounter.textContent = `${fps} FPS`;
+  fpsCounter.classList.toggle("low", fps < 45);
+  fpsMeter.frames = 0;
+  fpsMeter.lastSampleAt = now;
+}
+
 function update(now) {
+  updateFpsCounter(now);
+
   if (game.paused) {
     game.lastTime = now;
     requestAnimationFrame(update);
     return;
-  }
-
-  if (game.autoFire && !canUseFireControls()) {
-    setAutoFire(false, { silent: true });
   }
 
   const delta = Math.min(48, now - game.lastTime);
@@ -4078,8 +4099,11 @@ function startAutoFireLoop() {
   stopAutoFireLoop();
   triggerFireControl();
   autoFireRepeatId = window.setInterval(() => {
-    if (!game.autoFire || !canUseFireControls()) {
-      setAutoFire(false, { silent: true });
+    if (!game.autoFire) {
+      stopAutoFireLoop();
+      return;
+    }
+    if (!canUseFireControls()) {
       return;
     }
     triggerFireControl();
@@ -4180,6 +4204,10 @@ function handleFirePointerDown(event) {
   }
   flashControl(fireButton);
   flashControl(touchFireZone);
+  if (game.autoFire) {
+    setAutoFire(false);
+    return;
+  }
   capturePointer(event.currentTarget, event);
   beginFireHold();
 }
@@ -4433,6 +4461,10 @@ window.addEventListener("keydown", (event) => {
     moveFlight("moveRight");
   } else if (flightAction === "fire") {
     if (!event.repeat && canUseFireControls()) {
+      if (game.autoFire) {
+        setAutoFire(false);
+        return;
+      }
       keyboardFireHeld = true;
       beginFireHold();
     }

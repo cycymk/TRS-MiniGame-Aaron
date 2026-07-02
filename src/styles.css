@@ -104,6 +104,7 @@ body {
 .hack-action-button,
 .weapon-dock,
 .pause-button,
+.fps-counter,
 .toast {
   position: absolute;
   z-index: 5;
@@ -526,6 +527,37 @@ body {
     0 0 0 0.2rem rgba(255, 217, 90, 0.14),
     0 0 22px rgba(255, 217, 90, 0.35),
     inset 0 0 18px rgba(255, 233, 145, 0.16);
+}
+
+.fps-counter {
+  top: 2.35%;
+  right: calc(2.1% + clamp(2.25rem, 3.8vw, 3rem) + 0.9rem);
+  z-index: 7;
+  min-width: 4.7rem;
+  padding: 0.26rem 0.48rem 0.24rem;
+  border: 1px solid rgba(139, 246, 255, 0.44);
+  border-radius: 4px;
+  color: rgba(232, 252, 255, 0.92);
+  background: rgba(3, 14, 24, 0.54);
+  box-shadow:
+    0 0 14px rgba(67, 218, 255, 0.18),
+    inset 0 0 12px rgba(80, 226, 255, 0.08);
+  font-family: "Orbitron", "Segoe UI", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  letter-spacing: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.fps-counter.low {
+  border-color: rgba(255, 215, 103, 0.64);
+  color: #ffe69a;
+  box-shadow:
+    0 0 14px rgba(255, 202, 72, 0.22),
+    inset 0 0 12px rgba(255, 218, 97, 0.1);
 }
 
 .timer-panel {
@@ -1322,9 +1354,11 @@ button {
 }
 
 .result-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(38rem, 94vw);
   max-height: 92vh;
-  overflow: auto;
+  overflow: hidden;
   padding: clamp(1rem, 2.8vw, 1.45rem);
   border: 1px solid rgba(151, 235, 255, 0.68);
   border-radius: 6px;
@@ -1337,6 +1371,7 @@ button {
 }
 
 .result-dialog header {
+  flex: 0 0 auto;
   display: grid;
   gap: 0.25rem;
   margin-bottom: 0.85rem;
@@ -1368,6 +1403,7 @@ button {
 }
 
 .result-stats {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.5rem;
@@ -1399,6 +1435,7 @@ button {
 }
 
 .result-badges {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
@@ -1417,8 +1454,17 @@ button {
 }
 
 .leaderboard-panel {
+  display: flex;
+  flex: 1 1 13rem;
+  flex-direction: column;
+  min-height: 9.5rem;
+  overflow: hidden;
   padding-top: 0.75rem;
   border-top: 1px solid rgba(151, 235, 255, 0.2);
+}
+
+.leaderboard-panel header {
+  flex: 0 0 auto;
 }
 
 .leaderboard-panel header,
@@ -1437,9 +1483,14 @@ button {
 
 .leaderboard-panel ol {
   display: grid;
+  flex: 1 1 auto;
   gap: 0.3rem;
+  min-height: 0;
   margin: 0.55rem 0 0;
   padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.2rem;
   list-style: none;
 }
 
@@ -1454,6 +1505,7 @@ button {
 }
 
 .result-replay-button {
+  flex: 0 0 auto;
   width: 100%;
   min-height: 2.8rem;
   margin-top: 0.9rem;
@@ -1657,6 +1709,10 @@ button {
     display: none;
   }
 
+  .leaderboard-panel {
+    min-height: 7.5rem;
+  }
+
   .ship-panel {
     width: 26%;
     min-width: 150px;
@@ -1666,6 +1722,11 @@ button {
     left: clamp(9.8rem, 30vw, 14rem);
     right: 1.4%;
     max-width: none;
+  }
+
+  .game-shell.run-active .fps-counter {
+    top: calc(3.6% + 3.85rem);
+    right: 1.8%;
   }
 
   .boss-panel {
@@ -1733,6 +1794,11 @@ button {
     top: 6.2%;
     left: 18%;
     right: 1.6%;
+  }
+
+  .game-shell.run-active .fps-counter {
+    top: calc(6.2% + 3.85rem);
+    right: 2%;
   }
 
   .fever-panel {

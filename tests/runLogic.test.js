@@ -226,6 +226,20 @@ test("speed energy items are consumed and immediately accelerate the run", () =>
   assert.ok(next.events[0].z <= 0.04);
 });
 
+test("speed energy items are collected before passing through the player ship", () => {
+  const state = createRunState({
+    lane: 1,
+    entities: [{ id: "item", kind: "item", type: "speedEnergy", lane: 1, z: 0.16 }],
+    spawnTimerMs: 100000,
+  });
+
+  const next = updateRunState(state, {}, 16);
+
+  assert.equal(next.entities.some((entity) => entity.id === "item"), false);
+  assert.equal(next.effects.speedBoostMs > 0, true);
+  assert.equal(next.events[0].effectType, "pickup");
+});
+
 test("minigame trigger items pause the run for a reward minigame", () => {
   const state = createRunState({
     lane: 1,

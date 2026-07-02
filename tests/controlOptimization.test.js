@@ -289,6 +289,38 @@ test("holding fire for two seconds toggles auto fire on and off", async (t) => {
   assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), false);
 });
 
+test("auto fire survives hack state and only fire input turns it off", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.goto(url);
+  await startGame(page);
+
+  await page.keyboard.down("0");
+  await page.waitForFunction(
+    () => document.querySelector("#fireButton")?.classList.contains("auto-fire"),
+    undefined,
+    { timeout: 2600 },
+  );
+  await page.keyboard.up("0");
+
+  await page.locator("#hackButton").click();
+  await page.waitForSelector("#hackPanel:not(.hidden)");
+  await page.waitForTimeout(850);
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), true);
+
+  await page.locator("#hackButton").click();
+  await page.locator("#hackPanel").waitFor({ state: "hidden" });
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), true);
+
+  await page.locator("#fireButton").click();
+  assert.equal(await page.locator("#fireButton").evaluate((button) => button.classList.contains("auto-fire")), false);
+});
+
 test("starting on mobile requests fullscreen for the game shell", async (t) => {
   const { server, url } = await startStaticServer();
   t.after(() => server.close());
@@ -385,6 +417,105 @@ test("chrono run hud stays above the hp and ammo meters", async (t) => {
   assert.ok(layout.runBottom < layout.hpTop - 4);
   assert.ok(layout.runBottom < layout.ammoTop - 4);
   assert.ok(layout.runLeft > layout.distanceRight + 8);
+});
+
+test("fps counter stays clear of top-right controls", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const viewports = [
+    { width: 1280, height: 720, isMobile: false, hasTouch: false },
+    { width: 390, height: 844, isMobile: true, hasTouch: true },
+  ];
+
+  for (const viewport of viewports) {
+    const page = await browser.newPage(viewport);
+    await page.goto(url);
+    await page.locator("#chronoRunButton").click();
+    await page.waitForSelector("#runHud:not(.hidden)");
+    await page.waitForFunction(() => /^\d+ FPS$/.test(document.querySelector("#fpsCounter")?.textContent ?? ""));
+
+    const layout = await page.evaluate(() => {
+      const rectFor = (selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return {
+          left: box.left,
+          right: box.right,
+          top: box.top,
+          bottom: box.bottom,
+          width: box.width,
+          height: box.height,
+        };
+      };
+      const overlaps = (first, second) =>
+        first.left < second.right &&
+        first.right > second.left &&
+        first.top < second.bottom &&
+        first.bottom > second.top;
+      const shell = rectFor(".game-shell");
+      const fps = rectFor("#fpsCounter");
+      return {
+        text: document.querySelector("#fpsCounter").textContent,
+        overlapsPause: overlaps(fps, rectFor("#pauseButton")),
+        overlapsRunHud: overlaps(fps, rectFor("#runHud")),
+        insideShell:
+          fps.left >= shell.left &&
+          fps.right <= shell.right &&
+          fps.top >= shell.top &&
+          fps.bottom <= shell.bottom,
+      };
+    });
+
+    assert.match(layout.text, /^\d+ FPS$/);
+    assert.equal(layout.overlapsPause, false);
+    assert.equal(layout.overlapsRunHud, false);
+    assert.equal(layout.insideShell, true);
+    await page.close();
+  }
+});
+
+test("result leaderboard owns scrolling without pushing summary controls offscreen", async (t) => {
+  const { server, url } = await startStaticServer();
+  t.after(() => server.close());
+
+  const browser = await launchBrowser();
+  t.after(() => browser.close());
+
+  const page = await browser.newPage({ viewport: { width: 606, height: 800 } });
+  await page.goto(url);
+  await page.evaluate(() => {
+    document.querySelector("#resultOverlay").classList.remove("hidden");
+    const list = document.querySelector("#leaderboardList");
+    list.textContent = "";
+    for (let index = 0; index < 24; index += 1) {
+      const item = document.createElement("li");
+      item.innerHTML = `<span>${index + 1}. 20260703</span><strong>${(24000 - index * 731).toLocaleString("en-US")}</strong><em>${1800 - index} LY</em>`;
+      list.append(item);
+    }
+  });
+
+  const layout = await page.evaluate(() => {
+    const dialog = document.querySelector(".result-dialog");
+    const list = document.querySelector("#leaderboardList");
+    const replay = document.querySelector("#resultReplayButton").getBoundingClientRect();
+    const header = document.querySelector(".result-dialog header").getBoundingClientRect();
+    return {
+      dialogOverflowY: getComputedStyle(dialog).overflowY,
+      listOverflowY: getComputedStyle(list).overflowY,
+      listCanScroll: list.scrollHeight > list.clientHeight,
+      headerVisible: header.top >= 0 && header.bottom <= window.innerHeight,
+      replayVisible: replay.top >= 0 && replay.bottom <= window.innerHeight,
+    };
+  });
+
+  assert.equal(layout.dialogOverflowY, "hidden");
+  assert.equal(layout.listOverflowY, "auto");
+  assert.equal(layout.listCanScroll, true);
+  assert.equal(layout.headerVisible, true);
+  assert.equal(layout.replayVisible, true);
 });
 
 test("chrono run hack input does not open the hacking minigame", async (t) => {

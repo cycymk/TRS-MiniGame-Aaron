@@ -4,6 +4,7 @@ export const RUN_MIN_SPEED = 0.72;
 export const RUN_MAX_SPEED = 1.9;
 export const RUN_SHOT_DAMAGE = 2;
 export const RUN_COLLISION_Z = 0.07;
+const RUN_ITEM_PICKUP_Z = 0.18;
 
 const DEFAULT_ENEMY_TUNING = {
   hpMultiplier: 1,
@@ -614,7 +615,7 @@ function createEnemyEntity(id, type, lane, stage = DEFAULT_STAGE) {
 
 export function getRunCollisionZ(entity) {
   if (entity.kind === "item") {
-    return RUN_COLLISION_Z * 1.42;
+    return RUN_ITEM_PICKUP_Z;
   }
   if (entity.kind === "enemy") {
     return RUN_COLLISION_Z * (entity.collisionScale ?? entity.size ?? 1);
