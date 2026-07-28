@@ -19,7 +19,25 @@
       <canvas id="spaceCanvas" width="1280" height="720" aria-label="space combat view"></canvas>
 
       <section id="startOverlay" class="start-overlay" aria-label="title screen">
-        <div>
+        <div class="title-backdrop-rotator" aria-hidden="true">
+          <img
+            class="title-backdrop title-backdrop-one"
+            src="./public/assets/time-scar-01-the-descent.png"
+            alt=""
+          />
+          <img
+            class="title-backdrop title-backdrop-two"
+            src="./public/assets/time-scar-02-the-revelation.png"
+            alt=""
+          />
+          <img
+            class="title-backdrop title-backdrop-three"
+            src="./public/assets/time-scar-03-the-choice.png"
+            alt=""
+          />
+        </div>
+        <div class="title-backdrop-grade" aria-hidden="true"></div>
+        <div class="title-content">
           <strong>==TRS Game==</strong>
           <span>TAP to Start</span>
           <div class="title-mode-actions">

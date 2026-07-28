@@ -120,19 +120,94 @@ body {
   justify-items: start;
   padding-left: clamp(1.4rem, 7vw, 6rem);
   pointer-events: auto;
+  background: #03040b;
+  isolation: isolate;
+}
+
+.title-backdrop-rotator,
+.title-backdrop-grade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.title-backdrop-rotator {
+  z-index: -2;
+  overflow: hidden;
+}
+
+.title-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 43%;
+  opacity: 0;
+  filter: saturate(0.9) contrast(1.08) brightness(0.7);
+  transform: scale(1.035);
+  animation: title-backdrop-cycle 15s ease-in-out infinite both;
+}
+
+.title-backdrop-one {
+  animation-delay: -0.75s;
+}
+
+.title-backdrop-two {
+  animation-delay: 4.25s;
+}
+
+.title-backdrop-three {
+  animation-delay: 9.25s;
+}
+
+.title-backdrop-grade {
+  z-index: -1;
   background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0.18) 46%, rgba(0, 0, 0, 0.38)),
-    radial-gradient(circle at 28% 50%, rgba(72, 230, 255, 0.18), transparent 42%);
+    linear-gradient(90deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.23) 48%, rgba(0, 0, 0, 0.44)),
+    linear-gradient(180deg, rgba(2, 3, 10, 0.32), transparent 38%, rgba(1, 3, 9, 0.42)),
+    radial-gradient(circle at 28% 50%, rgba(72, 230, 255, 0.16), transparent 42%);
 }
 
 .start-overlay.hidden {
   display: none;
 }
 
-.start-overlay > div {
+.start-overlay > .title-content {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: clamp(0.6rem, 1.8vw, 1.2rem);
   animation: title-swipe 680ms cubic-bezier(0.2, 0.86, 0.24, 1) both;
+}
+
+@keyframes title-backdrop-cycle {
+  0%,
+  2% {
+    opacity: 0;
+    transform: scale(1.045);
+  }
+
+  7%,
+  28% {
+    opacity: 1;
+  }
+
+  33.333%,
+  100% {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-backdrop {
+    animation: none;
+  }
+
+  .title-backdrop-one {
+    opacity: 1;
+  }
 }
 
 .start-overlay strong {
